@@ -79,11 +79,16 @@ and docs. Checks listed per task are mandatory evidence.
     esbuild bundle, `mermaid` pinned to 11.15.0 for parity with the fork.
   - Commit: `chore: scaffold excalidraw-mcp and prove mermaid conversion in node`
 
-- [ ] **T2 Configuration from an environment file** (test-first)
-  - `src/config.ts`: load `.env` (dotenv), require `EXCALIDRAW_USERNAME` and
-    `EXCALIDRAW_PASSWORD`, default `EXCALIDRAW_BASE_URL=http://localhost:3030`,
-    normalize trailing slash, request timeout, redacted debug summary.
-  - Checks: `node --test` green, including missing-variable failures and defaults.
+- [x] **T2 Configuration from an environment file** (test-first)
+  - `src/config.ts`: `loadConfig(env)` with required `EXCALIDRAW_USERNAME` and
+    `EXCALIDRAW_PASSWORD`, `EXCALIDRAW_BASE_URL` defaulted to `http://localhost:3030`
+    with trailing slashes trimmed, `EXCALIDRAW_TIMEOUT_MS` defaulted to `30000`,
+    `ConfigError` naming the offending variable, and `describeConfig` that reports the
+    password only as present or absent. `loadEnvFile` parses through `dotenv` and stays
+    pure: it returns a record, never mutating `process.env`, and never throws when the
+    file is absent.
+  - Checks: `npm test` 15/15 green after an observed RED of 2 failing tests;
+    `npm run build` exit 0 with no stale `dist/index.js`; `test-fixtures/` removed.
   - Commit: `feat(config): load excalidraw connection settings from env file`
 
 - [ ] **T3 Authenticated API client** (test-first, local stub server)
@@ -95,8 +100,9 @@ and docs. Checks listed per task are mandatory evidence.
   - Commit: `feat(api): authenticated excalidraw client with session reuse`
 
 - [ ] **T4 Mermaid to scene conversion** (test-first)
-  - `src/scene/mermaid.ts`: promote `scripts/lib/dom-shim.mjs` into the runtime path,
-    flatten or reject `subgraph ... end` blocks before parsing (the dependency's
+  - `src/scene/mermaid.ts`: promote `scripts/lib/dom-shim.mjs` into the runtime path
+    (moving `jsdom` from `devDependencies` to `dependencies`), flatten or reject
+    `subgraph ... end` blocks before parsing (the dependency's
     subgraph lookup is broken, see the T1 spike note), convert, regenerate ids, and
     emit a valid scene `{type, version, source, elements, appState, files}`.
   - Calibrate label layout with a fixture harness, not by guessing: measure
