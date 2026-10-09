@@ -248,3 +248,107 @@ Deliberate simplifications (recorded, not hidden):
 3. Relationship labels are anchored near the arrow's start corridor rather
    than centered on the whole arrow, so multi-column spans keep the label in
    clear space.
+
+## T6 addendum: flowcharts get their own layered layout (mermaid/dagre retired)
+
+This addendum **supersedes the "Flowcharts are unaffected" conclusion** of the
+T5 addendum.
+
+Root cause, measured: mermaid's flowchart layout (dagre) runs inside jsdom
+with no real text metrics, so it reserves a **constant ~74 px per node
+regardless of label length**. On a real diagram the nodes inside one rank sat
+74 px apart (x = -10, 64, 138, 232) while their final Excalidraw boxes were
+**720–1040 px wide** — 22 overlapping box pairs at 100 % overlap. The same
+74 px appeared in a minimal graph with 84–132 px boxes, and a terse-label
+variant of the same diagram still overlapped in 18 pairs, so label length is
+not the cause. Patching `getBoundingClientRect` changed nothing.
+
+Three disagreeing width measurements:
+
+| Measurement | Value |
+| --- | --- |
+| mermaid's layout (dagre under jsdom) | constant ~74 px per node |
+| SVG `getBBox` shim (`dom-shim.ts`, 0.6 × font size + 24 px slack) | 12 px per glyph-unit |
+| Excalidraw's own final text measurement | ~12.4 px per character |
+
+Fix, following the ER architecture (`src/scene/er.ts`):
+`src/scene/flowchart.ts` reads the model straight from mermaid's flowchart db
+(`getDiagramFromText(text)` → `type === "flowchart-v2"` for BOTH `flowchart`
+and `graph` input → `db.getData()` for nodes/edges/shapes/edge types,
+`db.getSubGraphs()` for subgraph membership, `db.getDirection()` for the
+normalized direction) and computes the geometry itself: cycle-tolerant
+longest-path ranking (back edges excluded from ranking, still drawn as
+arrows), one barycentre pass per rank over the previous rank, every rank
+centred, boxes sized from their own labels with the shim's `nodeLabelWidth`
+(12 px per glyph-unit + slack — above Excalidraw's ~12.4 px/char for every
+realistic label), TD and LR honoured (BT/RL laid out as TB/LR), one arrow per
+edge between box borders with a deliberate ±12 px perpendicular spread so
+width and height are both non-zero, self-edges as a bulge out of the right
+border, edge labels as free text at the arrow midpoint — never bound to the
+arrow (residual risk 4) — and subgraphs as dashed enclosing rectangles with
+their title. The whole scene is offset to positive coordinates. Routing in
+`src/scene/mermaid.ts`: `er` → er.ts, `flowchart-v2` → flowchart.ts, any
+other detected type → typed `UnsupportedDiagramError` naming the type and the
+supported list; a failed detection still falls through to the generic strict
+parse (typed parse error).
+
+Before/after, same fixtures, old path = `parseMermaidToExcalidraw` +
+bundled converter (still reachable directly; no longer routed to for
+flowcharts), new path = `mermaidToScene`:
+
+| Fixture | Path | nodes | arrows | box overlaps | negative coords | zero-size arrows | images |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| fan-out (long labels) | OLD | 5 | 4 | **6** | **1** | 0 | 0 |
+| fan-out (long labels) | NEW | 5 | 4 | **0** | **0** | 0 | 0 |
+| fan-in (long labels) | OLD | 5 | 4 | **6** | **1** | 0 | 0 |
+| fan-in (long labels) | NEW | 5 | 4 | **0** | **0** | 0 | 0 |
+| decision, 2 labelled branches | OLD | 4 | 3 | **3** | **1** | **1** | 0 |
+| decision, 2 labelled branches | NEW | 4 | 3 | **0** | **0** | **0** | 0 |
+
+RED evidence: the geometry tests in `src/scene/flowchart.test.ts` were
+written first and failed on the dependency path — the fan-out and fan-in
+fixtures each reported `6 overlapping node box pairs` plus 1 negative
+coordinate, the LR fixture a zero-size arrow, and the sequence/pie inputs
+produced scenes instead of the typed unsupported error. After the module:
+all 8 fixtures measure 0 overlaps / 0 negatives / 0 zero-size arrows /
+0 images, with the declared rank counts honoured.
+
+## T7 addendum: rendering a diagram to PNG, the feedback loop
+
+Element counts and element types are not legibility. A diagram measured as
+"58 elements, 7 rectangles, 0 images" was still unreadable, so the project can
+render what it produces and look at it.
+
+### The measured recipe
+
+1. `npm run build:export`: esbuild `--platform=browser --format=iife
+   --global-name=Ex` on `scripts/export-entry.mjs`, which re-exports
+   `exportToBlob` from `@excalidraw/excalidraw`; the bundle is about 14.5 MB.
+2. Launch Chromium with Playwright and set `globalThis.EXCALIDRAW_ASSET_PATH`
+   to the `file://` URL of `node_modules/@excalidraw/excalidraw/dist/prod/`, so
+   the Excalifont files resolve locally instead of from a CDN.
+3. Inject the bundle with `page.addScriptTag({ path })` and call
+   `Ex.exportToBlob({ elements, files, mimeType, appState })`. The global is the
+   **module namespace**, so the function is `Ex.exportToBlob`, not `Ex`.
+4. About 3 seconds and a 142 KB PNG for a ten-node flowchart, with real
+   Excalifont text. The browser is reused across renders.
+
+### Traps, all measured
+
+- `appState.exportScale` **and** a top-level `exportScale` are ignored by the
+  version in use: the same scene rendered 506x905 with byte-identical output at
+  scales 1, 0.5, 0.475 and 0.4. `maxWidthOrHeight` *is* honoured (506x905 became
+  223x400) and so is `exportPadding` (60 added a hundred pixels to each side).
+  A requested scale is therefore applied as an explicit canvas resample, which
+  is a raster operation and does not re-render text at a larger font size.
+- Playwright 1.64 expects Chromium build **1248**; this machine has **1243**
+  installed. `chromium.launch()` fails with `Executable doesn't exist at ...`.
+  Launching with `executablePath` pointing at 1243's
+  `chrome-headless-shell.exe` works and reports Chromium 153.0.8010.12.
+  `src/render/browser.ts` resolves it as: `EXCALIDRAW_MCP_CHROMIUM`, then
+  Playwright's own path, then the newest `chromium*` build under the
+  Playwright browsers directory, and it lists what it looked for when it fails.
+- The shared browser **keeps the test process alive**. `node --test` waits for
+  its children, so without `closeSharedBrowser()` in an `after()` hook the whole
+  suite hangs — it hung for fifteen minutes before this was found. The MCP
+  server is unaffected because its exit hook kills the browser child.

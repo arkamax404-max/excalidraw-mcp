@@ -36,13 +36,27 @@ Mermaid yourself.
 
 ## Mermaid authoring rules (from measured limits)
 
-- Supported diagram types (tested end-to-end): **flowcharts** — including
-  `subgraph … end` grouping, nested subgraphs included — and **ER diagrams**
-  (`erDiagram`, with attributes, keys, comments, relationships, cardinalities
-  and self-relationships). `subgraph` grouping is preserved in the result; you
-  can rely on it. ER diagrams use the project's own grid layout, so they come
-  out readable: boxes never overlap, attribute texts sit inside their entity
-  box, and every relationship arrow is visible.
+- Supported diagram types (tested end-to-end): **flowcharts** and **ER
+  diagrams** (`erDiagram`, with attributes, keys, comments, relationships,
+  cardinalities and self-relationships). Anything else (sequence, class,
+  state, pie, …) is rejected with a typed `UnsupportedDiagramError` naming
+  the type and the supported list — convert the input to a flowchart or an
+  ER diagram instead of retrying the same type.
+- Flowcharts (`flowchart` / `graph`, `TD` and `LR`) use the project's own
+  layered layout, so you can rely on this geometry: **node boxes never
+  overlap** (fan-outs, fan-ins, decisions and long labels included), every
+  label sits inside its own box, every arrow is visible with non-zero width
+  and height, and nothing lands at negative coordinates. Directions `TD` and
+  `LR` are honoured (`BT`/`RL` lay out like `TD`/`LR`); shapes rectangle,
+  rounded, stadium, diamond and circle are supported; edge labels render as
+  free text beside the arrow, including on vertical arrows; self-edges render
+  as a small loop; cycles render with the back-edge arrow; `subgraph … end`
+  blocks (nested included) render as dashed enclosing rectangles with their
+  title. Arrows between far-apart ranks are straight lines and may cross
+  boxes they do not connect — keep wide fan-outs in `LR` if that bothers you.
+- ER diagrams use the project's own grid layout, so they come out readable:
+  boxes never overlap, attribute texts sit inside their entity box, and every
+  relationship arrow is visible.
 - ER readability guidance (what the layout rewards):
   - any number of entities works — they are placed on a roughly square grid;
     about `sqrt(n)` columns, so a dozen entities still lays out cleanly;
@@ -58,6 +72,8 @@ Mermaid yourself.
   - self-relationships (`ITEM ||--o| ITEM`) render as a small loop out of the
     box's right edge with the label beside it — no special authoring needed.
 - Keep flowchart labels short; long labels on short arrows overflow.
+  (Node boxes themselves always fit their labels; this concerns only the
+  label of a short arrow.)
 - Prefer **rectangles** (`A[Label]`) over diamonds for labelled nodes:
   diamonds are a known-weak shape (the rectangle/ellipse fixtures measure
   0 wrapped / 0 overflowing labels; diamonds are recorded, not guaranteed).
@@ -65,9 +81,29 @@ Mermaid yourself.
   up front (`MermaidLimitError`), never silently truncated.
 - Edge labels on **vertical** arrows overflow (their arrow bounding box is
   ~0 px wide) — put labelled arrows horizontally (`flowchart LR`) or drop the
-  label.
+  label. (Only diagrams that still go through the dependency's generic path
+  can hit this; flowchart edge labels are drawn as free text and are not
+  bound to the arrow.)
 - A parse failure can never produce a broken scene: it surfaces as a typed
   error instead of a placeholder image. Retry with simpler Mermaid.
+
+## See before you save
+
+`render_diagram` returns the **image**. Element counts and element types are not
+legibility, so use it instead of guessing:
+
+- preview a draft: `render_diagram` with `mermaid:"…"` converts and renders it
+  **without saving anything**; iterate on the Mermaid until the picture is
+  right, then call `create_diagram` with the same text;
+- inspect what is stored: `render_diagram` with `name:"…"` renders an existing
+  diagram without changing it;
+- wide diagrams: pass `maxWidth` (longest side in pixels) so the image stays
+  readable instead of being scaled down by whatever displays it;
+- zoom: `scale` between 0.2 and 4 (it is a raster resample, so keep it near 1
+  unless you need the pixels).
+
+The tool is read-only, and the PNG is also written to the system temp
+directory under `excalidraw-mcp-render/` so a human can open the same file.
 
 ## Read before you fetch
 
@@ -89,3 +125,4 @@ first; request `format:"scene"` only when you actually need the raw elements
 | `Mermaid could not be converted` | Simplify the Mermaid (fewer nodes/edges, shorter labels) and retry |
 | `Diagram too large: … maxEdges / maxTextSize` | Split the diagram or trim labels; there is no override |
 | `The Excalidraw server could not be reached / did not answer` | The deployment is down or `EXCALIDRAW_BASE_URL` is wrong; retry later — this is transient, not an input problem |
+| `Could not render the diagram: … no Chromium …` | The PNG renderer has no browser on this machine; a human must run `npx playwright install chromium` or set `EXCALIDRAW_MCP_CHROMIUM`. Everything except `render_diagram` keeps working |

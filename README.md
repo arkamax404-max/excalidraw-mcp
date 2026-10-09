@@ -20,6 +20,11 @@ deployment must expose the authenticated endpoints (`/api/auth/login`,
 ## Requirements
 
 - Node.js >= 20 (engine requirement; developed and tested on Node 24.15)
+- A Chromium for the PNG renderer (`render_diagram`). The browser is only needed
+  when that tool is called; everything else runs without it. Playwright's own
+  browser is used, and `EXCALIDRAW_MCP_CHROMIUM` can point at an existing
+  executable when the installed build does not match the Playwright version
+  (`npx playwright install chromium` otherwise).
 - A reachable Excalidraw server and an active user account on it — **not
   needed at startup**; the login happens lazily on the first tool call, so
   `tools/list` works with no Excalidraw server running
@@ -161,6 +166,29 @@ Returns `name`, `fileName`, `format` plus the summary or the scene.
 Input: `name` (required). Deletes the diagram and returns the canonical
 `name` and `fileName`; a missing diagram is a typed not-found error.
 
+### `render_diagram`
+
+Renders a diagram to a PNG and returns **the image itself**, so an agent can
+judge legibility instead of inferring it from element counts.
+
+Input: exactly one source, plus two optional controls.
+
+| Field | Notes |
+| --- | --- |
+| `name` | Render an existing diagram by name, without changing it |
+| `mermaid` | Convert Mermaid text through this project's own pipeline and render it, **saving nothing** — the loop for checking a draft before `create_diagram` |
+| `scene` | Render a raw Excalidraw scene object |
+| `scale` | Raster scale between 0.2 and 4 (default 1). Applied as an explicit canvas resample, because Excalidraw's own `exportScale` is ignored by the version in use |
+| `maxWidth` | Shrink the export so its longest side is at most this many pixels, keeping the aspect ratio |
+
+Returns the PNG as an image content block plus a text summary: source, pixel
+size, element count, elapsed time, the scale applied, whether `maxWidth`
+reduced it, and the absolute path of the PNG written under the system temp
+directory (`excalidraw-mcp-render/`).
+
+Rendering is read-only: it never writes to Excalidraw and never writes inside
+the repository.
+
 ## Generation modes
 
 | | `mode: "agent"` | `mode: "fork-ai"` |
@@ -183,11 +211,27 @@ failed parse never produces a broken scene: the converter's silent
 Diagram types and how they are rendered (tested against the fixtures in
 `src/scene/fixtures.ts`):
 
-- **Flowcharts** convert through the bundled dependency — including
-  `subgraph … end` blocks and nested subgraphs, parsed strictly with no
-  flattening. The DOM shim bridges mermaid 11's render-id-prefixed DOM ids to
-  the dependency's unprefixed `[id="…"]` / `[id='…']` lookups (see
-  `src/scene/dom-shim.ts`), so grouping survives the conversion.
+- **Flowcharts** (`flowchart` and `graph` input, `TD`/`TB` and `LR` directions,
+  shapes rectangle / rounded / stadium / diamond / circle, edge labels,
+  self-edges, cycles, and `subgraph … end` blocks with nesting) are rendered
+  by this project's **own layered layout** (`src/scene/flowchart.ts`), not by
+  mermaid's dagre engine: under jsdom dagre gets no real text metrics and
+  reserves a constant ~74 px per node, stacking boxes of 720–1040 px on top
+  of each other (22 overlapping pairs on a measured real diagram). The own
+  layout ranks nodes with a cycle-tolerant longest-path layering, orders each
+  rank with a barycentre pass, sizes every box from its own label (generously
+  enough that Excalidraw's own text metrics cannot overflow it), centres each
+  rank, offsets the whole scene to non-negative coordinates, and draws one
+  arrow per edge between the box borders with the edge label as free text at
+  the midpoint (never bound to the arrow). Subgraphs render as dashed
+  enclosing rectangles with their title. Guarantees, verified by the geometry
+  tests in `src/scene/flowchart.test.ts`: no two node boxes overlap, no
+  negative coordinates, every node label inside its box, every arrow with
+  non-zero width AND height, no image elements. Recorded simplifications:
+  `BT`/`RL` are laid out as `TB`/`LR` respectively, arrows between
+  non-adjacent ranks are straight lines and may cross boxes they do not
+  connect, and diamond/circle boxes are sized for the shape's inscribed label
+  zone.
 - **ER diagrams** (`erDiagram`, with entity attributes, keys, comments,
   relationships, cardinalities and self-relationships) are rendered by this
   project's **own layout** (`src/scene/er.ts`), not by the dependency: the
@@ -198,6 +242,12 @@ Diagram types and how they are rendered (tested against the fixtures in
   non-degenerate arrows (verified by the geometry tests in
   `src/scene/er.test.ts`: no overlapping boxes, no negative coordinates,
   non-zero arrows).
+
+Any other Mermaid diagram type (sequence, class, state, pie, …) fails fast
+with a typed `UnsupportedDiagramError` naming the detected type and the
+supported list (flowchart, ER), instead of producing garbage or a placeholder
+image. A failed detection (genuinely invalid input) still raises the typed
+parse error.
 
 Parse result metadata reports `skeletonElementCount` and `elementCount` on
 both paths.
@@ -243,7 +293,7 @@ picks the skill up from any project afterwards.
 ## Development
 
 ```bash
-npm test               # node --test over all src/**/*.test.ts — verified: 99 tests, 99 pass
+npm test               # node --test over all src/**/*.test.ts — verified: 136 tests, 136 pass
 npm run build          # verified: exit 0
 npm run spike:mermaid  # converts a fixture diagram end-to-end — verified: ok: true, 21 elements
 ```

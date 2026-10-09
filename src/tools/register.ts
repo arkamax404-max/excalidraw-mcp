@@ -28,7 +28,9 @@ import {
   MermaidParseError,
   MermaidSceneError,
 } from "../scene/errors.ts";
+import { RenderError } from "../render/png.ts";
 import { createDiagramTools, type DiagramToolDeps, type DiagramTools } from "./diagram-tools.ts";
+import { createRenderTools, type RenderDiagramResult, type RenderToolDeps, type RenderTools } from "./render-tools.ts";
 import { DiagramConflictError, ToolInputError } from "./errors.ts";
 
 /**
@@ -85,6 +87,9 @@ function describeError(error: unknown): string {
   if (error instanceof HttpApiError) {
     return `Excalidraw server error (${error.status}): ${error.serverMessage ?? "no details"}. Fix: retry or adjust the request.`;
   }
+  if (error instanceof RenderError) {
+    return `Could not render the diagram: ${error.message}`;
+  }
   const message = error instanceof Error ? error.message : String(error);
   return `Unexpected error: ${message}. Fix: retry; if it persists, report the failure.`;
 }
@@ -100,12 +105,34 @@ async function runTool(fn: () => Promise<unknown>): Promise<CallToolResult> {
 }
 
 /**
- * Registers all four diagram tools onto the given MCP server.
- * T6 will call this with a stdio-transport-backed `McpServer`; it is exported
- * on its own so the transport stays out of this module.
+ * Builds the MCP result for a render: the image itself plus the summary the
+ * agent needs (pixel size, element count, elapsed time, saved path). Kept out
+ * of the registration callback so it can be tested without a transport.
  */
-export function registerDiagramTools(server: McpServer, deps: DiagramToolDeps): DiagramTools {
+export function renderToolResult(rendered: RenderDiagramResult): CallToolResult {
+  const { png, ...summary } = rendered;
+  return {
+    content: [
+      { type: "image", data: png.toString("base64"), mimeType: "image/png" },
+      { type: "text", text: JSON.stringify(summary, null, 2) },
+    ],
+  };
+}
+
+/**
+ * Registers the diagram tools and the PNG renderer onto the given MCP server.
+ * The transport lives outside this module: it is exported on its own so a stdio
+ * host can call it with an `McpServer` of its own.
+ *
+ * The renderer's injectable pieces stay optional, so the production call site
+ * only has to provide the API client and the Mermaid converter.
+ */
+export function registerDiagramTools(
+  server: McpServer,
+  deps: DiagramToolDeps & Pick<RenderToolDeps, "renderScene" | "writePng">,
+): DiagramTools & RenderTools {
   const tools = createDiagramTools(deps);
+  const renderTools = createRenderTools(deps);
 
   server.registerTool(
     "create_diagram",
@@ -165,5 +192,32 @@ export function registerDiagramTools(server: McpServer, deps: DiagramToolDeps): 
     (input) => runTool(() => tools.delete_diagram(input)),
   );
 
-  return tools;
+  server.registerTool(
+    "render_diagram",
+    {
+      title: "Render diagram to PNG",
+      description:
+        "Render a diagram to a PNG and return the image, so you can judge legibility instead of guessing from element " +
+        "counts. Provide exactly one source: name (an existing diagram, rendered without changes), mermaid (Mermaid " +
+        "text converted through this project's pipeline and rendered WITHOUT saving anything), or scene (a raw scene " +
+        "object). Optional scale (default 1) and maxWidth (downscale wider results). Rendering is read-only and the " +
+        "PNG is also written to the system temp directory.",
+      inputSchema: {
+        name: z.string().optional().describe("Render an existing diagram by name"),
+        mermaid: z.string().optional().describe("Render Mermaid text converted locally, without saving it"),
+        scene: z.record(z.string(), z.unknown()).optional().describe("Render a raw Excalidraw scene object"),
+        scale: z.number().optional().describe("Pixel scale between 0.2 and 4 (default 1)"),
+        maxWidth: z.number().int().optional().describe("Downscale when the result would be wider than this many pixels"),
+      },
+    },
+    async (input) => {
+      try {
+        return renderToolResult(await renderTools.render_diagram(input));
+      } catch (error: unknown) {
+        return toolResultForError(error);
+      }
+    },
+  );
+
+  return { ...tools, ...renderTools };
 }

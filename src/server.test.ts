@@ -130,7 +130,7 @@ function initializeAndListTools(spawned: SpawnedServer): Promise<JsonRpcMessage>
 }
 
 describe("MCP stdio server (real child process)", () => {
-  it("answers initialize + tools/list with the four tools, stdout stays pure JSON-RPC", async () => {
+  it("answers initialize + tools/list with the five tools, stdout stays pure JSON-RPC", async () => {
     const spawned = spawnServer({ EXCALIDRAW_USERNAME: DUMMY_USER, EXCALIDRAW_PASSWORD: DUMMY_PASSWORD });
     try {
       const init = await initializeAndListTools(spawned);
@@ -139,7 +139,13 @@ describe("MCP stdio server (real child process)", () => {
       spawned.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
       const list = await spawned.waitFor((message) => message.id === 2 && message.result !== undefined);
       const toolNames = (list.result?.tools ?? []).map((tool) => tool.name).sort();
-      assert.deepEqual(toolNames, ["create_diagram", "delete_diagram", "get_diagram", "list_diagrams"]);
+      assert.deepEqual(toolNames, [
+        "create_diagram",
+        "delete_diagram",
+        "get_diagram",
+        "list_diagrams",
+        "render_diagram",
+      ]);
 
       // stdout-purity proof: every single line the child wrote to stdout must
       // parse as JSON-RPC 2.0 — one stray line would corrupt the session.

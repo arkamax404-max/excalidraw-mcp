@@ -10,8 +10,9 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && npm run build:converter && tsc -p tsconfig.json",
+    "build": "npm run clean && npm run build:converter && npm run build:export && tsc -p tsconfig.json",
     "build:converter": "esbuild --bundle --platform=node --format=esm --outfile=dist/vendor/excalidraw-converter.mjs --log-level=warning scripts/converter-entry.mjs",
+    "build:export": "esbuild --bundle --platform=browser --format=iife --global-name=Ex --outfile=dist/vendor/excalidraw-export.js --log-level=warning scripts/export-entry.mjs",
     "test": "node --test \"src/**/*.test.ts\"",
     "spike:mermaid": "npm run build:converter && node scripts/spike-mermaid.mjs",
     "start": "node dist/server.js"
@@ -26,6 +27,7 @@
     "dotenv": "^18.0.6",
     "jsdom": "^27.0.0",
     "mermaid": "11.15.0",
+    "playwright": "^1.64.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
