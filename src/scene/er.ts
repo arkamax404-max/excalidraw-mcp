@@ -335,6 +335,10 @@ export const arrowSkeleton = (options: {
     width,
     height,
     points: options.points,
+    // Curved rather than straight: with this project's layouts a long straight
+    // diagonal reads as a bar crossing the diagram, and a spline reads as a
+    // connector. Measured against the rendered PNG, not assumed.
+    roundness: { type: 2 },
     strokeStyle: "solid",
     startArrowhead: options.startArrowhead,
     endArrowhead: options.endArrowhead,

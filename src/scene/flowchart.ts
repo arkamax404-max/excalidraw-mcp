@@ -110,6 +110,29 @@ export const FLOW_PAD_X = 24;
 export const FLOW_PAD_Y = 16;
 /** Narrowest node box. */
 export const FLOW_MIN_BOX_WIDTH = 120;
+
+/**
+ * Widest a node label may get before it wraps onto the next line. Narrow boxes
+ * keep the ranks compact and the connectors short, which matters more for
+ * legibility than a single long line of text. The value is calibrated against
+ * the reference diagram the user edited by hand, whose boxes measured 299 to
+ * 459 px wide with two-line labels.
+ */
+export const FLOW_MAX_LABEL_WIDTH = 330;
+
+/**
+ * How much wider than this project's own estimate Excalidraw's real text may
+ * render. The shim measures about 12 px per glyph at font size 20, while
+ * Excalifont in the browser renders wider, and a container label that outgrows
+ * its box spills over the border — visible in the rendered PNG. Sizing every
+ * line with this factor keeps the text inside, at the cost of a slightly wider
+ * box.
+ */
+export const FLOW_LABEL_SAFETY = 1.25;
+
+/** Line width used for wrapping AND for sizing, so the two never disagree. */
+const flowLineWidth = (text: string, fontSize: number = FLOW_FONT_SIZE): number =>
+  nodeLabelWidth(text, fontSize) * FLOW_LABEL_SAFETY;
 /** Scene origin: everything is placed at strictly positive coordinates. */
 export const FLOW_ORIGIN = 80;
 /** Vertical gap between ranks in TD (also fits edge labels). */
@@ -314,22 +337,53 @@ interface Point {
   y: number;
 }
 
+/**
+ * Splits a node label into lines that fit `maxWidth`, breaking on spaces. A
+ * single word longer than the limit is left whole rather than broken: a split
+ * word reads worse than a wide box.
+ */
+export function wrapFlowLabel(
+  text: string,
+  maxWidth: number = FLOW_MAX_LABEL_WIDTH,
+  fontSize: number = FLOW_FONT_SIZE,
+): string[] {
+  const words = text.split(/\s+/).filter((word) => word !== "");
+  if (words.length === 0) {
+    return [""];
+  }
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current === "" ? word : `${current} ${word}`;
+    if (current === "" || flowLineWidth(candidate, fontSize) <= maxWidth) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current !== "") {
+    lines.push(current);
+  }
+  return lines;
+}
+
 /** Box geometry for one node, sized from its own label. */
 const boxFor = (node: FlowNode): { width: number; height: number } => {
-  const labelWidth = nodeLabelWidth(node.label, FLOW_FONT_SIZE);
-  const labelHeight = FLOW_TEXT_HEIGHT;
+  const lines = wrapFlowLabel(node.label);
+  const lineWidth = Math.max(...lines.map((line) => flowLineWidth(line)));
+  const labelHeight = lines.length * FLOW_TEXT_HEIGHT;
   if (node.shape === "diamond") {
     // The label must fit the rhombus' inscribed rectangle.
-    return { width: 2 * (labelWidth + FLOW_PAD_X), height: 2 * (labelHeight + FLOW_PAD_Y) };
+    return { width: 2 * (lineWidth + FLOW_PAD_X), height: 2 * (labelHeight + FLOW_PAD_Y) };
   }
   if (node.shape === "circle" || node.shape === "doublecircle") {
     // The label must fit the circle: take the label's diagonal, plus padding.
-    const diameter =
-      Math.sqrt(labelWidth * labelWidth + labelHeight * labelHeight) + 2 * FLOW_PAD_X;
+    const diameter = Math.sqrt(lineWidth * lineWidth + labelHeight * labelHeight) + 2 * FLOW_PAD_X;
     return { width: diameter, height: diameter };
   }
   return {
-    width: Math.max(FLOW_MIN_BOX_WIDTH, labelWidth + 2 * FLOW_PAD_X),
+    width: Math.max(FLOW_MIN_BOX_WIDTH, lineWidth + 2 * FLOW_PAD_X),
     height: labelHeight + 2 * FLOW_PAD_Y,
   };
 };
@@ -610,7 +664,7 @@ export function buildFlowSkeletons(model: FlowModel): unknown[] {
       strokeWidth: 2,
       ...(container.roundness ? { roundness: container.roundness } : {}),
       label: {
-        text: node.label,
+        text: wrapFlowLabel(node.label).join("\n"),
         fontSize: FLOW_FONT_SIZE,
       },
     });

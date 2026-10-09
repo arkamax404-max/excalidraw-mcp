@@ -4,7 +4,15 @@ import { existsSync } from "node:fs";
 import { before, describe, it } from "node:test";
 
 import { UnsupportedDiagramError } from "./errors.ts";
+import {
+  FLOW_FONT_SIZE,
+  FLOW_LABEL_SAFETY,
+  FLOW_MAX_LABEL_WIDTH,
+  FLOW_PAD_X,
+  wrapFlowLabel,
+} from "./flowchart.ts";
 import { mermaidToScene } from "./mermaid.ts";
+import { nodeLabelWidth } from "./dom-shim.ts";
 import { FLOWCHART_FIXTURES, type FlowFixture } from "./fixtures.ts";
 
 /**
@@ -286,5 +294,69 @@ describe("flowchart routing", () => {
     await assert.rejects(() => mermaidToScene("flowchart TD\n  A[Inicio] --> {broken"));
     // The rejection type is asserted by mermaid.test.ts; here we only guard
     // that the flowchart routing does not swallow it into a scene.
+  });
+});
+
+/**
+ * Label wrapping and box sizing.
+ *
+ * Narrow boxes with two or three lines of text read better than one long line
+ * spanning the diagram, and every line has to fit inside its own box: a first
+ * attempt sized boxes with the shim's estimate alone and the rendered PNG
+ * showed labels spilling over the border, which is why sizing and wrapping now
+ * share one measurement and a safety factor.
+ */
+describe("flowchart label wrapping", () => {
+  it("keeps a short label on one line", () => {
+    assert.deepEqual(wrapFlowLabel("Usuario registrado"), ["Usuario registrado"]);
+  });
+
+  it("wraps a long label at the width limit", () => {
+    const lines = wrapFlowLabel(
+      "maintenanceorder_header1: orden, tipo y centro de responsabilidad",
+    );
+    assert.ok(lines.length > 1, "a long label must wrap");
+    for (const line of lines) {
+      // A line made of a single long word is deliberately left whole: breaking
+      // a word reads worse than a wide box.
+      if (!line.includes(" ")) {
+        continue;
+      }
+      assert.ok(
+        nodeLabelWidth(line, FLOW_FONT_SIZE) * FLOW_LABEL_SAFETY <= FLOW_MAX_LABEL_WIDTH + 1,
+        `line "${line}" should fit the limit`,
+      );
+    }
+    assert.equal(lines.join(" ").replace(/\s+/g, " "), "maintenanceorder_header1: orden, tipo y centro de responsabilidad");
+  });
+
+  it("leaves a single word longer than the limit whole", () => {
+    const word = "x".repeat(120);
+    assert.deepEqual(wrapFlowLabel(word), [word]);
+  });
+
+  it("never produces a box wider than the limit plus padding", async () => {
+    const scene = await mermaidToScene(
+      "flowchart TD\n  A[Un rotulo bastante largo que deberia partirse en varias lineas] --> B[Corto]\n",
+    );
+    const elements = scene.scene.elements as unknown as {
+      type?: string;
+      width?: number;
+      text?: string;
+    }[];
+    const boxes = elements.filter((element) => element.type === "rectangle");
+    assert.ok(boxes.length >= 2);
+    for (const box of boxes) {
+      const width = box.width ?? 0;
+      assert.ok(
+        width <= FLOW_MAX_LABEL_WIDTH + 2 * FLOW_PAD_X + 1,
+        `box width ${width} should stay within the limit`,
+      );
+    }
+    const labels = elements.filter((element) => element.type === "text").map((element) => String(element.text ?? ""));
+    assert.ok(
+      labels.some((label) => label.includes("\n")),
+      "the long label must be wrapped onto more than one line",
+    );
   });
 });
