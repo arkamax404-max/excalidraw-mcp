@@ -91,12 +91,14 @@ and docs. Checks listed per task are mandatory evidence.
     `npm run build` exit 0 with no stale `dist/index.js`; `test-fixtures/` removed.
   - Commit: `feat(config): load excalidraw connection settings from env file`
 
-- [ ] **T3 Authenticated API client** (test-first, local stub server)
-  - `src/api/client.ts`: login, in-memory cookie jar, automatic single re-login on
-    401, `listDiagrams`, `getDiagram`, `putDiagram`, `deleteDiagram`,
-    `generateMermaid`; typed errors for 400/401/403/404/429/5xx and network failures.
-  - Checks: `node --test` green against a `node:http` stub that mimics the fork
-    contract in the section above.
+- [x] **T3 Authenticated API client** (test-first, local stub server)
+  - `src/api/client.ts`, `src/api/errors.ts`, `src/api/stub-server.ts`: login with an
+    in-memory cookie, single re-login and single retry on 401, `listDiagrams`,
+    `getDiagram`, `putDiagram`, `deleteDiagram`, `generateMermaid`; typed errors for
+    400/401/404/429/5xx, timeout and unreachable host; names only URL-encoded because
+    the server owns normalization; no credential or cookie value in any error.
+  - Checks: `npm test` 28/28 green after an observed RED; `npm run build` exit 0;
+    `authedRequest` is a single conditional retry, so no loop is possible.
   - Commit: `feat(api): authenticated excalidraw client with session reuse`
 
 - [ ] **T4 Mermaid to scene conversion** (test-first)
