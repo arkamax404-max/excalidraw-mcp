@@ -188,9 +188,18 @@ and docs. Checks listed per task are mandatory evidence.
     with `passed: 12, failed: 0`; a deliberately broken assertion produced exit 1 and a
     complete report with one failure, then green again after restoring it;
     `npm run build` exit 0.
-  - Not verified: the real-deployment mode was never executed against an actual
-    Excalidraw server because none was reachable. Its code path is exercised only by
-    construction.
+  - Real-deployment follow-up (initially unverified, executed later): the real mode
+    was run against the live Excalidraw deployment and passed 12/12 with
+    `mode="real deployment"`; cleanup was then verified independently — the account
+    held only the pre-existing `ejemplo-camel`.
+  - The `fork-ai` leg was validated by hand against the live deployment before the
+    script could assert it: provider `openrouter`, model `openrouter/free`, 11
+    elements, stored, read back and deleted. `scripts/e2e.mjs` now asserts that leg
+    itself: in real-deployment mode the step requires non-empty provider/model
+    different from the stub's canned values plus `elementCount > 0`, and records a
+    skip (without failing the run) only when the deployment reports its AI endpoint
+    as unusable (HTTP 502/503/504 or a provider-configuration error). The
+    classification is unit-tested in `src/e2e-steps.test.ts` without a real provider.
   - Commit: `test(e2e): verify diagram lifecycle against a running server`
 
 ## Verification summary
@@ -212,6 +221,13 @@ Final state: `npm test` 70/70 green, `npm run build` exit 0, `node scripts/e2e.m
 12/12 steps ok, and a real stdio session listing the four tools with pure JSON-RPC on
 stdout.
 
+Follow-up: the real-deployment mode was later executed against the live deployment
+and passed 12/12 (`mode="real deployment"`, cleanup verified independently — only the
+pre-existing `ejemplo-camel` remained), the `fork-ai` leg was validated by hand
+(provider `openrouter`, model `openrouter/free`, 11 elements stored, read back and
+deleted), and `scripts/e2e.mjs` was extended to assert that leg itself, with the
+classification unit-tested in `src/e2e-steps.test.ts`.
+
 ### Checks that did not pass, and were not hidden
 
 - Labels bound to **vertical** arrows still overflow (`overflowingTextCount: 2`). A
@@ -228,9 +244,6 @@ stdout.
 
 ### Next steps
 
-- Run `node scripts/e2e.mjs` against the real deployment with `EXCALIDRAW_BASE_URL`,
-  `EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` set; that path is the only one still
-  unverified.
 - The end-to-end script embeds a stateful stub because the shared T3 stub is stateless.
   Consolidating both into one stateful stub removes a contract-drift risk.
 - Native review of a work-unit commit is the user's decision, and delivery (push, pull
