@@ -147,18 +147,32 @@ and docs. Checks listed per task are mandatory evidence.
     confirmed.
   - Commit: `feat(tools): diagram crud tools with agent and fork-ai modes`
 
-- [ ] **T6 stdio server entrypoint**
-  - `src/server.ts` + `bin` mapping; stdout reserved for JSON-RPC, every log line on
-    stderr; graceful shutdown.
-  - Checks: a scripted stdio session (`initialize`, `tools/list`) lists the four
-    tools and stdout stays pure JSON-RPC.
+- [x] **T6 stdio server entrypoint**
+  - `src/server.ts`: shebang entry, env-file resolution (`EXCALIDRAW_ENV_FILE`, then
+    the working directory `.env`, with real environment variables winning), network-free
+    startup so `tools/list` works with no Excalidraw server running, lazy login on the
+    first tool call, exit code 78 (sysexits `EX_CONFIG`) on invalid configuration, and
+    graceful shutdown on `SIGINT`, `SIGTERM` and stdin end.
+  - stdout purity guard: `console.log`/`info`/`debug` are redirected to stderr, because
+    a single stray stdout line corrupts the JSON-RPC session.
+  - Checks: `npm test` 69/69 green after an observed RED; `npm run build` exit 0 with the
+    shebang preserved in `dist/server.js`; a real piped session against the built server
+    returned 2 stdout lines, all parsing as JSON-RPC, listing `create_diagram`,
+    `list_diagrams`, `get_diagram`, `delete_diagram`, exit 0; an invalid configuration
+    exited 78 naming the variable with the password absent from stderr.
+  - Known limit: Windows cannot deliver `SIGTERM` to a handler, so the portable clean
+    shutdown path there is stdin end, which is wired and tested.
   - Commit: `feat(server): serve mcp over stdio with stderr-only logging`
 
 - [ ] **T7 Documentation and support skill**
-  - `README.md`: setup, environment file contract, client configuration, mode
-    guidance, rate-limit note.
-  - Support skill `excalidraw-diagrams` so agents pick the right mode and naming.
-  - Checks: documented commands verified by running them.
+  - `README.md`: setup, the environment file contract including that the human owns
+    `.env`, client configuration for an MCP host, mode guidance (when the agent should
+    convert locally versus delegate to the fork's AI), and the rate-limit note.
+  - Support skill `skills/excalidraw-diagrams/SKILL.md`, versioned here and installed
+    into the personal skills directory so agents in any project can find it. It teaches
+    mode selection, naming, Mermaid limits, and the known layout limits from T4.
+  - Checks: every documented command is actually run; the skill file has valid
+    frontmatter and its triggers match the request wording.
   - Commit: `docs: document setup, env contract and agent skill`
 
 - [ ] **T8 End-to-end verification against a running server**
