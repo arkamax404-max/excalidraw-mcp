@@ -175,13 +175,63 @@ and docs. Checks listed per task are mandatory evidence.
     frontmatter and its triggers match the request wording.
   - Commit: `docs: document setup, env contract and agent skill`
 
-- [ ] **T8 End-to-end verification against a running server**
-  - `scripts/e2e.mjs` exercising create (both modes) -> list -> get -> delete against
-    a stub or a real deployment, with evidence captured.
-  - Checks: e2e run output recorded; failures reported, not hidden.
+- [x] **T8 End-to-end verification against a running server**
+  - `scripts/e2e.mjs`: 12 steps over the real stack (real config, real API client, real
+    tool handlers, real Mermaid conversion) against a real HTTP server on an ephemeral
+    port, printing a per-step JSON report and continuing past a failure so the report is
+    complete. It also runs against a real deployment when `EXCALIDRAW_BASE_URL`,
+    `EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` are all set, prefixing names with
+    `mcp-e2e-` and deleting everything it creates.
+  - `src/e2e.test.ts` runs the script as a child process, asserting exit 0 and every step
+    ok, so the lifecycle is covered by `npm test`.
+  - Checks: `npm test` 70/70 green after an observed RED; `node scripts/e2e.mjs` exit 0
+    with `passed: 12, failed: 0`; a deliberately broken assertion produced exit 1 and a
+    complete report with one failure, then green again after restoring it;
+    `npm run build` exit 0.
+  - Not verified: the real-deployment mode was never executed against an actual
+    Excalidraw server because none was reachable. Its code path is exercised only by
+    construction.
   - Commit: `test(e2e): verify diagram lifecycle against a running server`
 
 ## Verification summary
 
-Filled in during Close: tasks completed, every failed or skipped check, and the next
-step.
+All eight tasks completed, one work-unit commit each, on `feat/excalidraw-mcp`:
+
+| Task | Commit |
+| --- | --- |
+| T1 scaffold and headless Mermaid spike | `55c450e` |
+| T2 configuration from the env file | `8b0d0e4` |
+| T3 authenticated API client | `0ec0231` |
+| T4 Mermaid to scene conversion | `8275cff` |
+| T5 diagram CRUD tools | `9835560` |
+| T6 stdio server entrypoint | `d85b25f` |
+| T7 documentation and agent skill | `7b50eb3` |
+| T8 end-to-end verification | see the commit for this task |
+
+Final state: `npm test` 70/70 green, `npm run build` exit 0, `node scripts/e2e.mjs`
+12/12 steps ok, and a real stdio session listing the four tools with pure JSON-RPC on
+stdout.
+
+### Checks that did not pass, and were not hidden
+
+- Labels bound to **vertical** arrows still overflow (`overflowingTextCount: 2`). A
+  vertical arrow's bounding box is about 0 px wide, so no measurement constant can fix
+  it. The skill tells agents to put labelled arrows horizontally.
+- **Diamonds** measure 0 wrapped and 0 overflowing on the fixture, but the usable text
+  width depends on the label, so they are recorded rather than guaranteed.
+- **`SIGTERM` cannot reach a handler on Windows**, so the portable clean-shutdown path
+  there is stdin end. That path is wired and tested.
+- `npm run start` pollutes stdout with npm banners, which would corrupt JSON-RPC. The
+  documented launch commands are `node dist/server.js` and `npm run start --silent`.
+- The agent tooling forbids writing `.env`-prefixed paths, so the committed template is
+  `env.example` and the human creates `.env`.
+
+### Next steps
+
+- Run `node scripts/e2e.mjs` against the real deployment with `EXCALIDRAW_BASE_URL`,
+  `EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` set; that path is the only one still
+  unverified.
+- The end-to-end script embeds a stateful stub because the shared T3 stub is stateless.
+  Consolidating both into one stateful stub removes a contract-drift risk.
+- Native review of a work-unit commit is the user's decision, and delivery (push, pull
+  request, merge) stays with the human.

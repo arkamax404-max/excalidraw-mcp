@@ -218,7 +218,33 @@ picks the skill up from any project afterwards.
 ## Development
 
 ```bash
-npm test               # node --test over all src/**/*.test.ts — verified: 69 tests, 69 pass
+npm test               # node --test over all src/**/*.test.ts — verified: 70 tests, 70 pass
 npm run build          # verified: exit 0
 npm run spike:mermaid  # converts a fixture diagram end-to-end — verified: ok: true, 21 elements
 ```
+
+### End-to-end verification
+
+```bash
+node scripts/e2e.mjs
+```
+
+Exercises the real stack — real config, real API client, real tool handlers,
+real Mermaid conversion — against a real HTTP server, and prints a JSON report
+with one entry per step (`name`, `ok`, `evidence`); exit code 0 when every step
+passed. Against the built-in local server (the default) it also verifies
+state transitions: overwrite protection, list reflection, stored scenes,
+delete-then-404.
+
+To run against a **real deployment** instead, export `EXCALIDRAW_BASE_URL`,
+`EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` before running the script:
+diagram names are then prefixed `mcp-e2e-` so the deployment is not polluted,
+and everything the script creates is deleted afterwards. The `fork-ai` step is
+skipped (recorded, not fatal) if the real deployment's AI endpoint is
+unavailable. The script never reads a `.env`; it requires `npm run build` to
+have produced the converter bundle and builds it on demand if missing.
+
+Note: the default local server is a stateful variant of the T3 stub contract
+(the T3 stub in `src/api/stub-server.ts` is intentionally stateless — canned
+responses — which cannot demonstrate persistence); see `startStatefulStub` in
+`scripts/e2e.mjs`.
