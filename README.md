@@ -179,10 +179,28 @@ Mermaid limits enforced before parsing: at most **250 edges** and **20000
 characters** — larger input is rejected instead of silently truncated. A
 failed parse never produces a broken scene: the converter's silent
 "single placeholder image" fallback is detected and returned as a typed error.
-`subgraph … end` blocks are flattened away automatically (the dependency
-cannot resolve them against mermaid 11.15's prefixed DOM ids); the result
-metadata reports which parse path won (`mode: "direct"` or
-`"subgraphs-flattened"`, plus `removedSubgraphBlocks`).
+
+Diagram types and how they are rendered (tested against the fixtures in
+`src/scene/fixtures.ts`):
+
+- **Flowcharts** convert through the bundled dependency — including
+  `subgraph … end` blocks and nested subgraphs, parsed strictly with no
+  flattening. The DOM shim bridges mermaid 11's render-id-prefixed DOM ids to
+  the dependency's unprefixed `[id="…"]` / `[id='…']` lookups (see
+  `src/scene/dom-shim.ts`), so grouping survives the conversion.
+- **ER diagrams** (`erDiagram`, with entity attributes, keys, comments,
+  relationships, cardinalities and self-relationships) are rendered by this
+  project's **own layout** (`src/scene/er.ts`), not by the dependency: the
+  dependency's ER parser derives every position and size from rendered SVG
+  geometry, which does not exist server-side, and the result is illegible.
+  The own layout reads the ER model from mermaid's diagram db, places entities
+  on a grid, keeps attribute texts inside their boxes, and guarantees
+  non-degenerate arrows (verified by the geometry tests in
+  `src/scene/er.test.ts`: no overlapping boxes, no negative coordinates,
+  non-zero arrows).
+
+Parse result metadata reports `skeletonElementCount` and `elementCount` on
+both paths.
 
 ## Troubleshooting
 
@@ -225,7 +243,7 @@ picks the skill up from any project afterwards.
 ## Development
 
 ```bash
-npm test               # node --test over all src/**/*.test.ts — verified: 79 tests, 79 pass
+npm test               # node --test over all src/**/*.test.ts — verified: 99 tests, 99 pass
 npm run build          # verified: exit 0
 npm run spike:mermaid  # converts a fixture diagram end-to-end — verified: ok: true, 21 elements
 ```

@@ -11,7 +11,7 @@ import {
   MermaidSceneError,
 } from "./errors.ts";
 import { convertSkeletons, mermaidToScene } from "./mermaid.ts";
-import { FIXTURES } from "./fixtures.ts";
+import { ER_FIXTURE, FIXTURES, NESTED_SUBGRAPH_FIXTURE, SUBGRAPH_FIXTURE } from "./fixtures.ts";
 
 /**
  * The conversion pipeline loads the prebuilt converter bundle from
@@ -109,25 +109,17 @@ describe("mermaidToScene", () => {
     );
   });
 
-  it("flattens subgraph blocks and reports the flattening", async () => {
-    const withSubgraph = [
-      "flowchart TD",
-      "  A[Inicio] --> B[Proceso]",
-      "  subgraph zona",
-      "    B --> C[Fin]",
-      "    C --> D[Archivo]",
-      "  end",
-      "  D --> A",
-    ].join("\n");
-    const result = await mermaidToScene(withSubgraph);
-    assert.equal(result.metadata.mode, "subgraphs-flattened");
-    assert.equal(result.metadata.removedSubgraphBlocks, 1);
-    assert.ok(result.scene.elements.length > 0);
-  });
+  // (The former "flattens subgraph blocks and reports the flattening" test used
+  // this same input and asserted mode "subgraphs-flattened"; the id-prefix
+  // selector fallback in dom-shim.ts makes the strict parse work, and the
+  // flattening retry plus its metadata fields (mode/removedSubgraphBlocks)
+  // were removed entirely — see "strict parse has no fallback path" below.)
 
-  it("keeps mode direct when no flattening was needed", async () => {
+  it("reports metadata element counts that match the scene", async () => {
     const result = await mermaidToScene(FIXTURES[0]!.mermaid);
-    assert.equal(result.metadata.mode, "direct");
+    assert.equal(result.metadata.elementCount, result.scene.elements.length);
+    assert.ok(result.metadata.skeletonElementCount > 0);
+    assert.deepEqual(Object.keys(result.metadata).sort(), ["elementCount", "skeletonElementCount"]);
   });
 
   it("rejects input above the dependency's maxTextSize limit", async () => {
@@ -148,6 +140,57 @@ describe("mermaidToScene", () => {
     await assert.rejects(() => mermaidToScene(lines.join("\n")), (error: unknown) => {
       assert.ok(error instanceof MermaidLimitError);
       assert.match(error.message, /maxEdges/);
+      return true;
+    });
+  });
+
+  it("converts an erDiagram natively with more than one element and no placeholder image", async () => {
+    // RED (pre-shim): the dependency's entity lookup `[id="..."]` never matches
+    // mermaid 11's prefixed DOM ids, so every erDiagram collapsed into the
+    // single placeholder-image fallback and surfaced as MermaidParseError.
+    const result = await mermaidToScene(ER_FIXTURE.mermaid);
+    const elements = result.scene.elements;
+    assert.ok(elements.length > 1, `expected multiple elements, got ${elements.length}`);
+    assert.equal(
+      elements.some((element) => element.type === "image"),
+      false,
+      "no placeholder image element may be present",
+    );
+  });
+
+  it("parses a subgraph flowchart strictly (no placeholder image, real elements)", async () => {
+    const result = await mermaidToScene(SUBGRAPH_FIXTURE.mermaid);
+    // The parse is strict: the flattening path no longer exists, so a scene
+    // with real elements can only come from the direct parse of the original
+    // text (the former flattened path reported a different metadata mode).
+    assert.ok(result.scene.elements.length > 0);
+    assert.equal(
+      result.scene.elements.some((element) => element.type === "image"),
+      false,
+    );
+  });
+
+  it("parses nested subgraphs natively too", async () => {
+    const result = await mermaidToScene(NESTED_SUBGRAPH_FIXTURE.mermaid);
+    assert.ok(result.scene.elements.length > 0);
+    assert.equal(
+      result.scene.elements.some((element) => element.type === "image"),
+      false,
+    );
+  });
+
+  it("strict parse has no fallback path: unparseable input never becomes a scene", async () => {
+    // With the flattening retry gone there is exactly one parse path; a
+    // failure must surface as a typed error, never as a recovered parse.
+    await assert.rejects(() => mermaidToScene("this is definitely not mermaid"), MermaidParseError);
+  });
+
+  it("still raises the typed placeholder-image error for genuinely invalid Mermaid", async () => {
+    // Regression guard for the shim's selector fallback: an input that parses
+    // but converts into the dependency's single placeholder image must keep
+    // surfacing as MermaidParseError, never as a broken scene.
+    await assert.rejects(() => mermaidToScene("flowchart TD\n  A[Inicio] --> {broken"), (error: unknown) => {
+      assert.ok(error instanceof MermaidParseError, "must be the typed parse error");
       return true;
     });
   });

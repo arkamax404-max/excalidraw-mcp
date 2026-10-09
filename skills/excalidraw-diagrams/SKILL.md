@@ -36,13 +36,31 @@ Mermaid yourself.
 
 ## Mermaid authoring rules (from measured limits)
 
-- Keep labels short; long labels on short arrows overflow.
+- Supported diagram types (tested end-to-end): **flowcharts** — including
+  `subgraph … end` grouping, nested subgraphs included — and **ER diagrams**
+  (`erDiagram`, with attributes, keys, comments, relationships, cardinalities
+  and self-relationships). `subgraph` grouping is preserved in the result; you
+  can rely on it. ER diagrams use the project's own grid layout, so they come
+  out readable: boxes never overlap, attribute texts sit inside their entity
+  box, and every relationship arrow is visible.
+- ER readability guidance (what the layout rewards):
+  - any number of entities works — they are placed on a roughly square grid;
+    about `sqrt(n)` columns, so a dozen entities still lays out cleanly;
+  - attribute rows are written as `type name KEYS "comment"` inside the box;
+    dozens of attributes per entity are fine (tested with 12; the box grows to
+    fit them), but very long rows widen the box and the grid with it — keep
+    types, names, keys and comments concise;
+  - long entity names are supported (tested with a 46-character name); the box
+    widens to fit the header, so prefer shorter names when you can;
+  - relationship labels (`: places`) plus cardinalities are written at the
+    arrow; column gaps grow to fit the widest label, but a short label still
+    reads better than a sentence;
+  - self-relationships (`ITEM ||--o| ITEM`) render as a small loop out of the
+    box's right edge with the label beside it — no special authoring needed.
+- Keep flowchart labels short; long labels on short arrows overflow.
 - Prefer **rectangles** (`A[Label]`) over diamonds for labelled nodes:
   diamonds are a known-weak shape (the rectangle/ellipse fixtures measure
   0 wrapped / 0 overflowing labels; diamonds are recorded, not guaranteed).
-- Do **not** rely on `subgraph … end` grouping: blocks are flattened away
-  before parsing (the result metadata reports the flattening). Sequence your
-  diagram so grouping is not load-bearing.
 - Stay within **250 edges** and **20000 characters**; larger input is rejected
   up front (`MermaidLimitError`), never silently truncated.
 - Edge labels on **vertical** arrows overflow (their arrow bounding box is
@@ -68,6 +86,6 @@ first; request `format:"scene"` only when you actually need the raw elements
 | `Diagram not found` | `list_diagrams` to see the real (canonical) names |
 | `Authentication failed` | The configured user/password is wrong; a human must fix `EXCALIDRAW_USERNAME` / `EXCALIDRAW_PASSWORD` — do not retry |
 | `rate limit … retry in N seconds` | Wait N seconds, then call `fork-ai` again; switch to `mode:"agent"` if you can |
-| `Mermaid could not be converted` | Simplify the Mermaid (fewer nodes/edges, shorter labels, no subgraphs) and retry |
+| `Mermaid could not be converted` | Simplify the Mermaid (fewer nodes/edges, shorter labels) and retry |
 | `Diagram too large: … maxEdges / maxTextSize` | Split the diagram or trim labels; there is no override |
 | `The Excalidraw server could not be reached / did not answer` | The deployment is down or `EXCALIDRAW_BASE_URL` is wrong; retry later — this is transient, not an input problem |

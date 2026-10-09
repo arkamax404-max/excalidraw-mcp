@@ -141,3 +141,110 @@ calibration"):
 3. **The horizontal-arrow margin is thin** (44 px text vs 46 px arrow for
    `"envia solicitud"`). Longer edge labels on short arrows can still overflow; the
    pre-flight `maxEdges`/`maxTextSize` checks do not cover label length.
+
+## T4 addendum 2: native ER and subgraph conversion (id-prefix shim)
+
+This addendum **supersedes residual risk 3 and the earlier "subgraphs must be
+flattened" conclusion**.
+
+Root cause, measured: mermaid 11 renders every DOM id **prefixed by the render
+id** (e.g. a subgraph `zona` renders as an element whose id ends with
+`-zona`; a probe ER render produced `probeER-entity-A-0`).
+`@excalidraw/mermaid-to-excalidraw@2.2.2` looks ids up **unprefixed**, and
+with two different quote styles that both miss:
+
+- ER entities: `containerEl.querySelector('[id="${entity.id}"]')` —
+  `dist/parser/er.js:185`, double quotes. The miss throws
+  `ER entity … not found in rendered SVG`, which the library swallows into its
+  single placeholder-image fallback — so every `erDiagram` failed.
+- Subgraphs: `containerEl.querySelector("[id='${data.id}']")` —
+  `dist/parser/flowchart.js:109`, single quotes. Same silent fallback.
+- Edges: `containerEl.querySelector('path[id="${edge.id}"][data-edge="true"]')`
+  — same shape plus attribute filters.
+
+Fix, in `src/scene/dom-shim.ts`: `installDomShim()` now patches
+`Element.prototype.querySelector`/`querySelectorAll` with a one-shot
+selector-compatibility fallback — when the exact lookup returns nothing, every
+`[id="X"]` / `[id='X']` in the selector is rewritten to the suffix match
+`[id$="-X"]` and the lookup is retried once. An exact match always wins;
+selectors without `[id=…]` are untouched; a failed rewrite returns the original
+empty result. The patch is idempotent and installed once for every consumer.
+
+Consequence for `src/scene/mermaid.ts`: the strict parse now handles **every**
+subgraph fixture, so the `subgraph … end` flattening retry and its metadata
+fields (`mode` / `removedSubgraphBlocks`) were **removed** — parsing is strict,
+with no fallback path; metadata reports only `skeletonElementCount` and
+`elementCount`.
+
+New fixtures (`src/scene/fixtures.ts`) and measured numbers after the fix:
+
+| Fixture | Skeleton elements | Scene elements | Element types | Placeholder image |
+| --- | --- | --- | --- | --- |
+| ER: attributes, keys, relationship + self-relationship | 41 | 47 | rectangle, line, arrow, text | no |
+| flowchart with one subgraph | 9 | 14 | rectangle, arrow, text | no |
+| flowchart with nested subgraphs | 10 | 16 | rectangle, arrow, text | no |
+
+(Previously each of these collapsed into the single placeholder image and
+erDiagram surfaced as `MermaidParseError`.)
+
+The selector fallback itself is pinned by unit tests on a synthetic document
+(`src/scene/dom-shim.test.ts`); the end-to-end conversions by
+`src/scene/mermaid.test.ts`.
+
+## T5 addendum: ER diagrams get their own layout (dependency ER path retired)
+
+The id-prefix shim (T4 addendum 2) made `erDiagram` *parse* through the
+dependency — and exposed that the dependency's ER geometry is unusable
+server-side.
+
+Root cause, measured: `dist/parser/er.js` derives every entity rectangle's
+position and size from the **rendered SVG** (`getBBox` plus accumulated
+transforms) and every relationship from rendered path points. Under this
+project's DOM shim that geometry is fabricated — `getBBox` returns
+`{x: 0, y: 0, approximate width}` for every node — so the ER scene came out
+illegible (reproduced locally on the repo fixture set; the task's wider
+reproduction measured 4 entity boxes of width 868/1332/604/608 with 3 of 6
+pairs overlapping and 26 of 35 attribute texts overlapping):
+
+| Metric (ER fixture: attributes, keys, rel + self-rel) | Dependency path (before) | Own layout (after) |
+| --- | --- | --- |
+| entity rectangles | 3 | 3 |
+| rectangle overlaps | 0 | **0** |
+| negative-coordinate elements | 35 | **0** |
+| attribute texts fully inside their box | 0 of 6 | **6 of 6** |
+| arrows | 3 | 3 |
+| zero-size arrows | 2 | **0** |
+| placeholder image elements | 0 | 0 |
+
+(Red test evidence: with the tests in `src/scene/er.test.ts` written first,
+all six ER fixtures failed on the dependency path — `negativeCoordinates`
+12–35 per fixture, `attributeTextsInsideBoxes` 0 vs expected, and zero-size
+arrows on every fixture with relationships.)
+
+Flowcharts are unaffected because dagre's layout inside mermaid's flowchart db
+supplies real coordinates; the ER db does not.
+
+Fix: `src/scene/er.ts` reads the ER model straight from mermaid
+(`mermaid.mermaidAPI.getDiagramFromText(text)` → `diagram.type === "er"` →
+`db.getData()`, which joins entities, attributes, relationship endpoints,
+cardinality arrow types and labels in one call) and computes the geometry
+itself: entities on a row-major grid with `ceil(sqrt(n))` columns, boxes sized
+from the text they contain using the same shim measurement the converter uses
+(`canvasTextWidth`), attribute texts as free text elements inside their box,
+one arrow per relationship with a deliberate ±12px spread so width and height
+are both non-zero, self-relationships as a bulge out of the box's right edge,
+and relationship labels as free text anchored near the arrow — never bound to
+it (residual risk 4 above). `src/scene/mermaid.ts` routes on mermaid's own
+diagram-type detection; a failed detection falls through to the generic path,
+so genuinely invalid input still raises the typed parse error.
+
+Deliberate simplifications (recorded, not hidden):
+
+1. `direction LR/TB` (`db.getDirection()`) is not consumed — the grid is
+   direction-agnostic.
+2. An arrow between entities far apart in the grid is drawn as a straight line
+   and may cross boxes it does not connect; only adjacency corridors are
+   guaranteed clear (labels are clamped into their corridor).
+3. Relationship labels are anchored near the arrow's start corridor rather
+   than centered on the whole arrow, so multi-column spans keep the label in
+   clear space.

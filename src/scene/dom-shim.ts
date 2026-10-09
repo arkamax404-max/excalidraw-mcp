@@ -77,6 +77,93 @@ const exposeGlobal = (name: string, value: unknown): void => {
   }
 };
 
+/**
+ * Matches the exact id-attribute selectors the dependency looks ids up with:
+ * `[id="X"]` (dist/parser/er.js) and `[id='X']` (dist/parser/flowchart.js).
+ */
+const ID_ATTR_SELECTOR = /\[\s*id\s*=\s*(?:"([^"]*)"|'([^']*)')\s*\]/g;
+
+/**
+ * Rewrites every `[id="X"]` / `[id='X']` occurrence in a selector to the
+ * suffix match `[id$="-X"]`, preserving the rest of the selector (so
+ * `path[id="e"][data-edge="true"]` keeps its extra filters). Returns `null`
+ * when the selector contains no exact id lookup, meaning no retry is needed.
+ */
+const rewriteExactIdSelectors = (selector: string): string | null => {
+  let replaced = false;
+  const rewritten = selector.replace(ID_ATTR_SELECTOR, (match, doubleQuoted?: string, singleQuoted?: string) => {
+    const value = doubleQuoted ?? singleQuoted ?? "";
+    if (value === "") {
+      return match; // `[id=""]` cannot be a prefix skew; leave it alone.
+    }
+    replaced = true;
+    return `[id$="-${value}"]`;
+  });
+  return replaced ? rewritten : null;
+};
+
+/** Marker set on patched functions so a re-install never double-wraps. */
+const idFallbackMarker = Symbol("domShimIdPrefixFallback");
+
+/** Structural stand-in for a DOM element (no DOM lib in tsconfig). */
+interface ShimElement {
+  [key: string]: unknown;
+}
+
+/**
+ * Wraps `Element.prototype.querySelector` / `querySelectorAll` with the
+ * id-prefix compatibility fallback.
+ *
+ * Contract: an exact match always wins (the fallback only runs when the
+ * exact lookup came back empty); selectors without `[id=…]` are untouched;
+ * a failed rewrite returns the original empty result; and an invalid
+ * rewritten selector never replaces a clean empty result with an exception.
+ */
+const installSelectorIdFallback = (prototype: Record<string, unknown>): void => {
+  const originalQuerySelector = prototype.querySelector as
+    | ((this: ShimElement, selector: string) => unknown)
+    | undefined;
+  const originalQuerySelectorAll = prototype.querySelectorAll as
+    | ((this: ShimElement, selector: string) => ArrayLike<unknown>)
+    | undefined;
+  if (
+    typeof originalQuerySelector !== "function" ||
+    typeof originalQuerySelectorAll !== "function" ||
+    idFallbackMarker in (originalQuerySelector as object)
+  ) {
+    return;
+  }
+
+  const withFallback = <R>(
+    original: (this: ShimElement, selector: string) => R,
+    isEmpty: (result: R) => boolean,
+  ): ((this: ShimElement, selector: string) => R) => {
+    const patched = function (this: ShimElement, selector: string): R {
+      const result = original.call(this, selector);
+      if (!isEmpty(result) || typeof selector !== "string") {
+        return result;
+      }
+      const rewritten = rewriteExactIdSelectors(selector);
+      if (rewritten === null) {
+        return result;
+      }
+      try {
+        const retried = original.call(this, rewritten);
+        return isEmpty(retried) ? result : retried;
+      } catch {
+        // The rewritten selector was invalid; the original empty result stands.
+        return result;
+      }
+    };
+    // SAFETY: functions accept expando symbol properties; defineProperty avoids a cast.
+    Object.defineProperty(patched, idFallbackMarker, { value: true });
+    return patched;
+  };
+
+  prototype.querySelector = withFallback(originalQuerySelector, (result) => result === null);
+  prototype.querySelectorAll = withFallback(originalQuerySelectorAll, (result) => result.length === 0);
+};
+
 const makeContext2d = (): Record<string | symbol, unknown> => {
   const noop = (): void => {};
   const target: Record<string | symbol, unknown> = {
@@ -203,6 +290,19 @@ export const installDomShim = ({ html = "<!doctype html><html><body></body></htm
   });
 
   const svgPrototype = window.SVGElement.prototype;
+
+  // ID-PREFIX COMPATIBILITY SHIM (mermaid 11 × @excalidraw/mermaid-to-excalidraw
+  // 2.2.2): mermaid renders DOM ids prefixed by the render id
+  // (`probeER-entity-A-0`), but the dependency looks ids up unprefixed —
+  // `[id="..."]` with double quotes in dist/parser/er.js:185 and `[id='...']`
+  // with single quotes in dist/parser/flowchart.js:109 — so the exact lookups
+  // can never match and ER diagrams/subgraphs collapse into the library's
+  // single placeholder-image fallback. Patching the Element prototype once
+  // here gives every consumer the retry; `installDomShim` is idempotent, and
+  // so is this patch (see the marker check above).
+  // window is typed `any` (jsdom.d.ts), so no cast is needed to pass the prototype.
+  installSelectorIdFallback(window.Element.prototype);
+
   svgPrototype.getBBox = function getBBox() {
     return {
       x: 0,

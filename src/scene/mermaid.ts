@@ -3,14 +3,22 @@
  *
  * Pipeline (see `odd/notes/mermaid-node-spike.md` for the evidence):
  * 1. validate and enforce the dependency's own limits up front;
- * 2. strict-parse the Mermaid text with `parseMermaidToExcalidraw`;
- *    on failure retry once with `subgraph ... end` blocks flattened away
- *    (the dependency's subgraph lookup can never match mermaid 11.15's
- *    prefixed DOM ids) and report which path produced the result;
- * 3. convert the parsed skeletons with the bundled converter from
+ * 2. detect the diagram type with mermaid itself
+ *    (`mermaid.mermaidAPI.getDiagramFromText(...).type`): `erDiagram` input is
+ *    routed to this project's own ER layout (`src/scene/er.ts`), because the
+ *    dependency's ER parser derives all geometry from the rendered SVG, which
+ *    the DOM shim fabricates, producing illegible scenes. Detection failures
+ *    are not errors: they just leave the input on the generic path, which
+ *    raises the typed parse error for genuinely invalid input;
+ * 3. strict-parse the remaining Mermaid text with `parseMermaidToExcalidraw`.
+ *    The DOM shim's id-prefix selector fallback (mermaid 11 renders ids
+ *    prefixed by the render id; the dependency looks them up unprefixed with
+ *    `[id="..."]` / `[id='...']`) makes flowcharts with `subgraph ... end`
+ *    blocks resolve natively, so no flattening retry is needed;
+ * 4. convert the parsed skeletons with the bundled converter from
  *    `dist/vendor/excalidraw-converter.mjs`, detecting the dependency's
  *    silent "single placeholder image" parse fallback as a hard error;
- * 4. assemble the scene object the Excalidraw server expects.
+ * 5. assemble the scene object the Excalidraw server expects.
  */
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -50,9 +58,6 @@ export interface ExcalidrawScene {
 }
 
 export interface MermaidSceneMetadata {
-  /** "direct": strict parse succeeded; "subgraphs-flattened": recovered parse. */
-  mode: "direct" | "subgraphs-flattened";
-  removedSubgraphBlocks: number;
   skeletonElementCount: number;
   elementCount: number;
 }
@@ -93,6 +98,8 @@ function resolveConverterBundle(): string {
 interface ScenePipeline {
   parseMermaid: (text: string, options: { maxEdges: number; maxTextSize: number }) => Promise<{ elements: unknown[] }>;
   convertToExcalidrawElements: (skeletons: unknown[], options?: { regenerateIds?: boolean }) => ExcalidrawElement[];
+  /** mermaid's own diagram-type detection ("er", "flowchart-v2", ...). */
+  getDiagramType: (text: string) => Promise<string | null>;
 }
 
 let pipelinePromise: Promise<ScenePipeline> | undefined;
@@ -113,6 +120,18 @@ async function loadPipeline(): Promise<ScenePipeline> {
       const mermaidToExcalidraw = (await import("@excalidraw/mermaid-to-excalidraw")) as {
         parseMermaidToExcalidraw: ScenePipeline["parseMermaid"];
       };
+      // The dependency's own config: initializing mermaid with anything else
+      // would poison the dependency's config-hash tracking (see er.ts header).
+      const { MERMAID_CONFIG } = await import("@excalidraw/mermaid-to-excalidraw/dist/constants.js");
+      const mermaid = ((await import("mermaid")) as {
+        default: {
+          mermaidAPI: {
+            initialize: (config: unknown) => void;
+            getDiagramFromText: (text: string) => Promise<{ type?: unknown; db?: unknown }>;
+          };
+        };
+      }).default;
+      mermaid.mermaidAPI.initialize({ ...MERMAID_CONFIG });
       const converterUrl = resolveConverterBundle();
       const converter = (await import(converterUrl)) as {
         convertToExcalidrawElements: ScenePipeline["convertToExcalidrawElements"];
@@ -120,6 +139,10 @@ async function loadPipeline(): Promise<ScenePipeline> {
       return {
         parseMermaid: mermaidToExcalidraw.parseMermaidToExcalidraw,
         convertToExcalidrawElements: converter.convertToExcalidrawElements,
+        getDiagramType: async (text: string) => {
+          const diagram = await mermaid.mermaidAPI.getDiagramFromText(text);
+          return typeof diagram?.type === "string" ? diagram.type : null;
+        },
       };
     })().catch((error: unknown) => {
       pipelinePromise = undefined;
@@ -133,35 +156,6 @@ async function loadPipeline(): Promise<ScenePipeline> {
 function countEdges(text: string): number {
   const matches = text.match(/-->|---|-\.->|==>|~~~|--o|--x|==o|==x/g);
   return matches ? matches.length : 0;
-}
-
-/**
- * Removes `subgraph` header lines and their matching `end` lines (plus any
- * `direction` lines inside the removed blocks). Nested subgraphs are handled
- * with a depth counter. Returns the flattened text and the number of removed
- * subgraph blocks.
- */
-export function flattenSubgraphs(text: string): { text: string; removedBlocks: number } {
-  const lines = text.split(/\r?\n/);
-  const kept: string[] = [];
-  let depth = 0;
-  let removedBlocks = 0;
-  for (const line of lines) {
-    if (/^\s*subgraph\b/i.test(line)) {
-      depth += 1;
-      removedBlocks += 1;
-      continue;
-    }
-    if (depth > 0 && /^\s*end\s*(%%.*)?$/i.test(line)) {
-      depth -= 1;
-      continue;
-    }
-    if (depth > 0 && /^\s*direction\b/i.test(line)) {
-      continue;
-    }
-    kept.push(line);
-  }
-  return { text: kept.join("\n"), removedBlocks };
 }
 
 /**
@@ -192,7 +186,7 @@ export async function convertSkeletons(skeletons: unknown[]): Promise<Excalidraw
 
 /**
  * Converts Mermaid text into an Excalidraw scene. See module docs for the
- * pipeline; the returned `metadata.mode` reports which parse path won.
+ * pipeline; parsing is strict — there is no flattening fallback path.
  */
 export async function mermaidToScene(
   mermaidText: string,
@@ -218,50 +212,31 @@ export async function mermaidToScene(
   const pipeline = await loadPipeline();
   const parseOptions = { maxEdges, maxTextSize };
 
-  /**
-   * IMPORTANT: the dependency's subgraph failure is silent — the strict parse
-   * SUCCEEDS and `convertSkeletons` detects the placeholder-image fallback. So
-   * the flattening retry wraps BOTH stages: parse/convert of the strict text,
-   * and, if that fails and subgraphs are present, parse/convert of the
-   * flattened text.
-   */
-  const parseAndConvert = async (
-    text: string,
-  ): Promise<{ elements: ExcalidrawElement[]; skeletonCount: number }> => {
-    const parsed = await pipeline.parseMermaid(text, parseOptions);
-    const elements = await convertSkeletons(parsed.elements);
-    return { elements, skeletonCount: parsed.elements.length };
-  };
+  // Route by mermaid's own diagram type: ER input goes to the project's own
+  // layout module (the dependency's ER geometry is unusable under the shim).
+  // A failed detection is not an error — the generic path below raises the
+  // typed parse error for genuinely invalid input.
+  let diagramType: string | null = null;
+  try {
+    diagramType = await pipeline.getDiagramType(mermaidText);
+  } catch {
+    diagramType = null;
+  }
 
   let elements: ExcalidrawElement[];
-  let mode: MermaidSceneMetadata["mode"];
-  let removedSubgraphBlocks = 0;
   let skeletonElementCount: number;
   try {
-    const result = await parseAndConvert(mermaidText);
-    elements = result.elements;
-    skeletonElementCount = result.skeletonCount;
-    mode = "direct";
-  } catch (directError: unknown) {
-    const flattened = flattenSubgraphs(mermaidText);
-    if (flattened.removedBlocks === 0) {
-      throw directError instanceof MermaidSceneError
-        ? directError
-        : new MermaidParseError("Mermaid could not be parsed and no subgraph flattening was possible", {
-            cause: directError,
-          });
+    if (diagramType === "er") {
+      const { erDiagramToScene } = await import("./er.ts");
+      return await erDiagramToScene(mermaidText, { convert: convertSkeletons, maxEdges });
     }
-    try {
-      const result = await parseAndConvert(flattened.text);
-      elements = result.elements;
-      skeletonElementCount = result.skeletonCount;
-      mode = "subgraphs-flattened";
-      removedSubgraphBlocks = flattened.removedBlocks;
-    } catch (flattenedError: unknown) {
-      throw new MermaidParseError("Mermaid could not be parsed even with subgraphs flattened", {
-        cause: flattenedError,
-      });
-    }
+    const parsed = await pipeline.parseMermaid(mermaidText, parseOptions);
+    elements = await convertSkeletons(parsed.elements);
+    skeletonElementCount = parsed.elements.length;
+  } catch (error: unknown) {
+    throw error instanceof MermaidSceneError
+      ? error
+      : new MermaidParseError("Mermaid could not be parsed", { cause: error });
   }
 
   const scene: ExcalidrawScene = {
@@ -275,8 +250,6 @@ export async function mermaidToScene(
   return {
     scene,
     metadata: {
-      mode,
-      removedSubgraphBlocks,
       skeletonElementCount,
       elementCount: elements.length,
     },
