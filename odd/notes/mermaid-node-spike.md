@@ -94,3 +94,50 @@ $ npm run spike:mermaid
 5. **`import()` order is load-bearing.** The shim must be installed before any dynamic
    import of the mermaid or Excalidraw modules; static imports would be hoisted too
    early.
+
+## T4 addendum: production port and label calibration
+
+The prototype became `src/scene/dom-shim.ts` + `src/scene/mermaid.ts` (this spike now
+imports the production shim, so it keeps proving the real code path). The pipeline
+strict-parses first; on failure — including the dependency's silent subgraph fallback,
+which surfaces as a single placeholder `image` element at conversion time, not as a
+thrown error — it retries once with `subgraph ... end` blocks flattened away and
+reports the path via `metadata.mode`.
+
+Final measurement constants (in `src/scene/dom-shim.ts`):
+
+| Constant | Value | Role |
+| --- | --- | --- |
+| `NODE_GLYPH_FACTOR` | 0.6 | `getBBox` width per glyph-unit × font size (node sizing) |
+| `NODE_SLACK` | 24 px | constant added to every node measurement |
+| `TEXT_GLYPH_FACTOR` | 0.14 | canvas `measureText` width per glyph-unit × font size |
+| `TEXT_SLACK` | 2 px | constant added to every text measurement |
+
+The node factor must dominate the text factor by a wide margin: wrapping and overflow
+are both triggered by a bound text measuring wider than its container.
+
+Per-fixture calibration table (harness: `src/scene/mermaid.test.ts`, "label layout
+calibration"):
+
+| Fixture | Elements | wrappedTextCount | overflowingTextCount | Acceptance |
+| --- | --- | --- | --- | --- |
+| chain of plain rectangles | 8 | 0 | 0 | zero-wrapped — met |
+| rectangle with two-word label | 5 | 0 | 0 | zero-wrapped — met |
+| ellipse (circle) nodes | 5 | 0 | 0 | zero-wrapped — met |
+| decision diamond | 10 | 0 | 0 | recorded — passes with these constants, not guaranteed |
+| edge label on a horizontal arrow | 6 | 0 | 0 | zero-wrapped — met (44 px text in a 46 px arrow, tight) |
+
+### Limitations that remain (measured, not fixed)
+
+1. **Edge labels bound to vertical arrows overflow.** The spike fixture still reports
+   `overflowingTextCount: 2` (label `"HTTP"` in a 0 px-wide vertical arrow, `"no"` in an
+   8 px one). A vertical arrow's bounding box is ~0 px wide, so no text measurement can
+   fit inside it; fixing this needs label unbinding in the converter output, which is a
+   structural change the dependency does not offer. Horizontal arrows are fine with the
+   calibrated constants.
+2. **Diamonds and other non-rect/ellipse containers are not guaranteed.** The decision
+   diamond fixture currently measures 0/0, but its usable width depends on the label
+   itself; the harness records it instead of asserting it.
+3. **The horizontal-arrow margin is thin** (44 px text vs 46 px arrow for
+   `"envia solicitud"`). Longer edge labels on short arrows can still overflow; the
+   pre-flight `maxEdges`/`maxTextSize` checks do not cover label length.

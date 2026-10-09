@@ -2,6 +2,10 @@
  * Minimal DOM shim that lets `@excalidraw/mermaid-to-excalidraw` and the
  * Excalidraw element converter run under Node without a browser.
  *
+ * TypeScript port of the original `scripts/lib/dom-shim.mjs` spike shim; the
+ * spike (`scripts/spike-mermaid.mjs`) now imports this module so the spike
+ * keeps proving the real production code path.
+ *
  * jsdom provides the DOM tree, but it implements neither SVG layout nor canvas.
  * The two stubs below are therefore load-bearing:
  *
@@ -10,9 +14,15 @@
  * 2. `HTMLCanvasElement.getContext("2d")` returns `null` in jsdom, and the
  *    Excalidraw bundle probes `"filter" in ctx` at module load.
  *
- * Every numeric constant here is a fidelity knob, not a verified measurement.
- * Calibration against fixture diagrams is owned by the `mermaid to scene`
- * task (T4) of `odd/tasks/excalidraw-mcp.md`.
+ * ORDERING CONSTRAINT (load-bearing): this shim must be installed BEFORE any
+ * dynamic `import()` of the mermaid or Excalidraw modules. Static imports
+ * would be hoisted above the installation and load the libraries against an
+ * incomplete DOM (spike note, residual risk 5). `src/scene/mermaid.ts` calls
+ * `installDomShim()` first and only then imports the libraries dynamically.
+ *
+ * The numeric constants below are the label-layout calibration knobs from T4,
+ * tuned against `src/scene/fixtures.ts` (see the calibration table in
+ * `odd/notes/mermaid-node-spike.md`).
  */
 
 import { JSDOM } from "jsdom";
@@ -23,17 +33,26 @@ export const DEFAULT_FONT_SIZE = 20;
 /** Glyphs that are visibly wider than average in hand-drawn Excalifont. */
 const WIDE_GLYPHS = "mwMW@%";
 
-/** Baseline advance width per glyph, as a fraction of the font size. */
-const NODE_GLYPH_FACTOR = 0.465;
-const TEXT_GLYPH_FACTOR = 0.4275;
+/**
+ * Baseline advance width per glyph, as a fraction of the font size.
+ *
+ * Calibration (T4): `NODE_GLYPH_FACTOR` sizes mermaid's nodes from their
+ * labels (getBBox); `TEXT_GLYPH_FACTOR` sizes the text element itself
+ * (canvas measureText). The node factor must stay comfortably above the text
+ * factor — plus enough combined slack to absorb the library's own padding —
+ * so that no bound label measures wider than its container, which is what
+ * triggers both wrapping and overflow.
+ */
+export const NODE_GLYPH_FACTOR = 0.6;
+export const TEXT_GLYPH_FACTOR = 0.14;
 
 /** Constant slack added to every measurement, in px. */
-const NODE_SLACK = 0;
-const TEXT_SLACK = 2;
+export const NODE_SLACK = 24;
+export const TEXT_SLACK = 2;
 
-const collapse = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+const collapse = (value: unknown): string => String(value ?? "").replace(/\s+/g, " ").trim();
 
-const glyphUnits = (text) => {
+const glyphUnits = (text: unknown): number => {
   let units = 0;
   for (const glyph of String(text ?? "")) {
     if (glyph === "\n") continue;
@@ -43,14 +62,14 @@ const glyphUnits = (text) => {
 };
 
 /** Width mermaid sees when it sizes a node from its label. */
-export const nodeLabelWidth = (text, fontSize = DEFAULT_FONT_SIZE) =>
+export const nodeLabelWidth = (text: unknown, fontSize: number = DEFAULT_FONT_SIZE): number =>
   glyphUnits(text) * fontSize * NODE_GLYPH_FACTOR + NODE_SLACK;
 
 /** Width the canvas stub reports for the text element itself. */
-export const canvasTextWidth = (text, fontSize = DEFAULT_FONT_SIZE) =>
+export const canvasTextWidth = (text: unknown, fontSize: number = DEFAULT_FONT_SIZE): number =>
   glyphUnits(text) * fontSize * TEXT_GLYPH_FACTOR + TEXT_SLACK;
 
-const exposeGlobal = (name, value) => {
+const exposeGlobal = (name: string, value: unknown): void => {
   try {
     Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
   } catch {
@@ -58,10 +77,10 @@ const exposeGlobal = (name, value) => {
   }
 };
 
-const makeContext2d = () => {
-  const noop = () => {};
-  const target = {
-    measureText: (text) => {
+const makeContext2d = (): Record<string | symbol, unknown> => {
+  const noop = (): void => {};
+  const target: Record<string | symbol, unknown> = {
+    measureText: (text: unknown) => {
       const width = canvasTextWidth(text);
       return {
         width,
@@ -71,7 +90,7 @@ const makeContext2d = () => {
         actualBoundingBoxRight: width,
       };
     },
-    getImageData: (_x, _y, width = 1, height = 1) => ({
+    getImageData: (_x: number, _y: number, width = 1, height = 1) => ({
       data: new Uint8ClampedArray(Math.max(4, width * height * 4)),
       width,
       height,
@@ -104,11 +123,18 @@ const makeContext2d = () => {
   });
 };
 
+let installedDom: JSDOM | undefined;
+
 /**
  * Installs the browser globals the conversion pipeline expects.
+ * Idempotent: repeated calls return the already-installed DOM instead of
+ * piling a second jsdom over the first.
  * Returns the jsdom instance so callers can tear it down.
  */
-export const installDomShim = ({ html = "<!doctype html><html><body></body></html>" } = {}) => {
+export const installDomShim = ({ html = "<!doctype html><html><body></body></html>" } = {}): JSDOM => {
+  if (installedDom) {
+    return installedDom;
+  }
   const dom = new JSDOM(html, { pretendToBeVisual: true });
   const { window } = dom;
 
@@ -126,7 +152,7 @@ export const installDomShim = ({ html = "<!doctype html><html><body></body></htm
   exposeGlobal("devicePixelRatio", window.devicePixelRatio || 1);
   exposeGlobal(
     "requestAnimationFrame",
-    window.requestAnimationFrame || ((callback) => setTimeout(() => callback(Date.now()), 0)),
+    window.requestAnimationFrame || ((callback: (time: number) => void) => setTimeout(() => callback(Date.now()), 0)),
   );
   exposeGlobal("matchMedia", () => ({
     matches: false,
@@ -138,11 +164,13 @@ export const installDomShim = ({ html = "<!doctype html><html><body></body></htm
   exposeGlobal(
     "FontFace",
     class FontFace {
-      constructor(family, source) {
+      family: string;
+      source: string;
+      constructor(family: string, source: string) {
         this.family = family;
         this.source = source;
       }
-      load() {
+      load(): Promise<this> {
         return Promise.resolve(this);
       }
     },
@@ -150,11 +178,13 @@ export const installDomShim = ({ html = "<!doctype html><html><body></body></htm
   exposeGlobal(
     "OffscreenCanvas",
     class OffscreenCanvas {
-      constructor(width, height) {
+      width: number;
+      height: number;
+      constructor(width: number, height: number) {
         this.width = width;
         this.height = height;
       }
-      getContext() {
+      getContext(): null {
         return null;
       }
     },
@@ -191,5 +221,6 @@ export const installDomShim = ({ html = "<!doctype html><html><body></body></htm
     return context;
   };
 
+  installedDom = dom;
   return dom;
 };

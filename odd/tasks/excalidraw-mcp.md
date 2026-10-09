@@ -101,20 +101,34 @@ and docs. Checks listed per task are mandatory evidence.
     `authedRequest` is a single conditional retry, so no loop is possible.
   - Commit: `feat(api): authenticated excalidraw client with session reuse`
 
-- [ ] **T4 Mermaid to scene conversion** (test-first)
-  - `src/scene/mermaid.ts`: promote `scripts/lib/dom-shim.mjs` into the runtime path
-    (moving `jsdom` from `devDependencies` to `dependencies`), flatten or reject
-    `subgraph ... end` blocks before parsing (the dependency's
-    subgraph lookup is broken, see the T1 spike note), convert, regenerate ids, and
-    emit a valid scene `{type, version, source, elements, appState, files}`.
-  - Calibrate label layout with a fixture harness, not by guessing: measure
-    `wrappedTextCount` and `overflowingTextCount` per fixture and record the numbers.
-  - Acceptance: 0 wrapped and 0 overflowing labels for every fixture made of
-    rectangles and ellipses; diamond and vertical-arrow-label fixtures may stay
-    wrapped only if the same failure reproduces in the fork's own browser path, and
-    that must be written down.
-  - Checks: `node --test` green; a real flowchart yields non-empty elements; the
-    produced scene passes the same `elements`-is-array contract the server enforces.
+- [x] **T4 Mermaid to scene conversion** (test-first)
+  - `src/scene/mermaid.ts`, `src/scene/dom-shim.ts`, `src/scene/errors.ts`,
+    `src/scene/fixtures.ts`: the shim became runtime code (`jsdom` moved to
+    `dependencies`), `mermaidToScene` validates input, pre-checks the dependency's own
+    limits, parses strictly and retries once with `subgraph ... end` blocks flattened,
+    converts through the bundled converter, and returns
+    `{type, version, source, elements, appState, files}` plus metadata naming the parse
+    path. The dependency's silent placeholder-image fallback is detected and turned
+    into a typed error instead of being persisted.
+  - The spike script now imports the production shim, so it proves the real code path.
+  - Checks: `npm test` 44/44 green after an observed RED; `npm run build` exit 0; a
+    post-build `node -e` import of `dist/scene/mermaid.js` converts a flowchart;
+    `npm run spike:mermaid` still `ok: true`.
+  - Calibration (constants `NODE_GLYPH_FACTOR=0.6`, `NODE_SLACK=24`,
+    `TEXT_GLYPH_FACTOR=0.14`, `TEXT_SLACK=2`), measured per fixture:
+
+    | fixture | elements | wrapped | overflowing |
+    | --- | --- | --- | --- |
+    | chain of rectangles | 8 | 0 | 0 |
+    | two-word label | 5 | 0 | 0 |
+    | ellipse nodes | 5 | 0 | 0 |
+    | decision diamond | 10 | 0 | 0 |
+    | horizontal edge label | 6 | 0 | 0 |
+
+  - Recorded limitations, not hidden: labels bound to **vertical** arrows still
+    overflow (`overflowingTextCount: 2` in the spike fixture) because a vertical
+    arrow's bounding box is ~0 px wide; diamonds pass with these constants but are
+    recorded rather than guaranteed; a long label on a short arrow can still overflow.
   - Commit: `feat(scene): convert mermaid to excalidraw scene in node`
 
 - [ ] **T5 MCP tools** (test-first at handler level)

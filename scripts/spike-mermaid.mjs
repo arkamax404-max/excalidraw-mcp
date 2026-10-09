@@ -4,9 +4,13 @@
  *
  * Run with `npm run spike:mermaid` (builds the converter bundle first).
  * Prints one JSON summary to stdout and exits non-zero on failure.
+ *
+ * Imports the PRODUCTION shim from `../src/scene/dom-shim.ts` (Node 24 runs
+ * TypeScript directly through type stripping, so the spike stays runnable
+ * without a build) so the spike keeps proving the real code path.
  */
 
-import { installDomShim } from "./lib/dom-shim.mjs";
+import { installDomShim } from "../src/scene/dom-shim.ts";
 
 const FIXTURE = `flowchart TD
   A[Cliente] -->|HTTP| B[API]
