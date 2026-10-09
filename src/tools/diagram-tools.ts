@@ -92,7 +92,40 @@ async function findExisting(deps: DiagramToolDeps, canonicalName: string): Promi
   return files.find((file) => file.name === canonicalName);
 }
 
+/**
+ * Serializes the overwrite check and the write for one canonical name.
+ *
+ * The review finding this answers: `overwrite: false` was a list-then-put
+ * check, so two concurrent creates for the same absent name could both pass it
+ * and the later write silently replaced the earlier one, even though neither
+ * caller asked to overwrite. The server exposes no conditional-create
+ * precondition, so the list check stays advisory and this lock is what makes it
+ * hold inside one MCP server process. Two server processes writing as the same
+ * user would still need a server-side precondition.
+ */
+function createNameLocks() {
+  const tails = new Map<string, Promise<void>>();
+
+  return async function withNameLock<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const previous = tails.get(name) ?? Promise.resolve();
+    // Chain after the previous holder whether it resolved or rejected.
+    const result = previous.then(task, task);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    tails.set(name, tail);
+    void tail.then(() => {
+      if (tails.get(name) === tail) {
+        tails.delete(name);
+      }
+    });
+    return result;
+  };
+}
+
 export function createDiagramTools(deps: DiagramToolDeps) {
+  const withNameLock = createNameLocks();
   async function create_diagram(input: CreateDiagramInput): Promise<CreateDiagramResult> {
     const rawName = requireNonEmptyName(input.name);
     const overwrite = input.overwrite ?? false;
@@ -140,14 +173,15 @@ export function createDiagramTools(deps: DiagramToolDeps) {
     // caller can be told the canonical name in advance; the server's echoed
     // name still wins.
     const canonicalName = normalizeDiagramName(rawName);
-    if (!overwrite) {
-      const existing = await findExisting(deps, canonicalName);
-      if (existing) {
-        throw new DiagramConflictError(existing.name);
+    const file = await withNameLock(canonicalName, async () => {
+      if (!overwrite) {
+        const existing = await findExisting(deps, canonicalName);
+        if (existing) {
+          throw new DiagramConflictError(existing.name);
+        }
       }
-    }
-
-    const file = await deps.client.putDiagram(canonicalName, scene);
+      return deps.client.putDiagram(canonicalName, scene);
+    });
     return {
       name: file.name,
       file,

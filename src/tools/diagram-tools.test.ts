@@ -243,6 +243,59 @@ describe("create_diagram handler", () => {
     await tools.create_diagram({ name: "nuevo", mode: "agent", mermaid: "a" });
     assert.equal(calls.putDiagram.length, 1);
   });
+
+  it("serializes the overwrite check and the write, so two concurrent creates cannot both win", async () => {
+    // Stateful fake: what is stored is visible to the next list, and the write
+    // yields. That yield is exactly the window a list-then-put check leaves open.
+    const stored = new Map<string, unknown>();
+    let puts = 0;
+    const client = {
+      async login() {
+        return {};
+      },
+      async session() {
+        return { authenticated: true };
+      },
+      async generateMermaid() {
+        return { mermaid: "a", provider: "stub-ai", model: "stub-1" };
+      },
+      async listDiagrams() {
+        return [...stored.keys()].map((name) => ({ name, fileName: `${name}.excalidraw` }));
+      },
+      async getDiagram(name: string) {
+        if (!stored.has(name)) {
+          throw new NotFoundError("file not found");
+        }
+        return { file: { name, fileName: `${name}.excalidraw` }, scene: stored.get(name) };
+      },
+      async putDiagram(name: string, scene: unknown) {
+        puts += 1;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        stored.set(name, scene);
+        return { name, fileName: `${name}.excalidraw` };
+      },
+      async deleteDiagram(name: string) {
+        stored.delete(name);
+        return { name, fileName: `${name}.excalidraw` };
+      },
+    } as unknown as DiagramToolDeps["client"];
+    const tools = createDiagramTools({ client, mermaidToScene: makeFakeConverter().converter });
+
+    const results = await Promise.allSettled([
+      tools.create_diagram({ name: "carrera", mode: "agent", mermaid: "primero" }),
+      tools.create_diagram({ name: "carrera", mode: "agent", mermaid: "segundo" }),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    assert.equal(fulfilled.length, 1, "exactly one concurrent create may win");
+    assert.equal(rejected.length, 1, "the other must be refused, not silently clobber");
+    assert.ok(
+      (rejected[0] as PromiseRejectedResult).reason instanceof DiagramConflictError,
+      "the loser must get the conflict error, not an internal failure",
+    );
+    assert.equal(puts, 1, "the losing caller must not reach the write");
+  });
 });
 
 describe("list/get/delete handlers", () => {
