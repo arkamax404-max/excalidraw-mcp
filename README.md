@@ -6,7 +6,14 @@ configured user. Diagram scenes are produced either locally from Mermaid text
 (no browser: a jsdom-based DOM shim plus a bundled Excalidraw converter) or via
 the fork's own AI endpoint.
 
-The server talks to the Excalidraw HTTP API over a session login, so the
+> [!IMPORTANT]
+> This server works **only** with our self-hosted Excalidraw fork,
+> <https://github.com/arkamax404-max/excalidraw>. It depends on HTTP endpoints
+> that the fork adds — session login, per-user diagram storage and the
+> prompt-to-Mermaid AI endpoint — so it does **not** work against upstream
+> Excalidraw or excalidraw.com, which expose no such server API.
+
+The server talks to that fork's HTTP API over a session login, so the
 deployment must expose the authenticated endpoints (`/api/auth/login`,
 `/api/files`, `/api/ai/diagram`).
 
@@ -218,7 +225,7 @@ picks the skill up from any project afterwards.
 ## Development
 
 ```bash
-npm test               # node --test over all src/**/*.test.ts — verified: 71 tests, 71 pass
+npm test               # node --test over all src/**/*.test.ts — verified: 79 tests, 79 pass
 npm run build          # verified: exit 0
 npm run spike:mermaid  # converts a fixture diagram end-to-end — verified: ok: true, 21 elements
 ```
@@ -239,14 +246,16 @@ delete-then-404.
 To run against a **real deployment** instead, export `EXCALIDRAW_BASE_URL`,
 `EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` before running the script:
 diagram names are then prefixed `mcp-e2e-` so the deployment is not polluted,
-and everything the script creates is deleted afterwards. Against a real
-deployment the `fork-ai` step is **always recorded as skipped**: its assertion
-still compares against the local stub's canned provider and model, so the step
-exercises the call and the endpoint but does not validate the real provider's
-answer (checked by hand against a live deployment: provider `openrouter`, model
-`openrouter/free`, 11 elements stored and read back). The script never reads a
-`.env`; it requires `npm run build` to have produced the converter bundle and
-builds it on demand if missing.
+and everything the script creates is deleted afterwards. In real mode the
+`fork-ai` step is actually validated: the reported provider and model must be
+non-empty strings different from the local stub's canned values, and the
+created diagram must contain at least one element. A skipped step is recorded
+only when the deployment itself reports its AI endpoint as unusable — an HTTP
+502/503/504 gateway-style failure or an error naming the provider
+configuration — with the reason captured in the report; any other wrong answer
+(unknown provider, empty model, failed conversion, empty diagram) fails the
+run. The script never reads a `.env`; it requires `npm run build` to have
+produced the converter bundle and builds it on demand if missing.
 
 Note: the default local server is a stateful variant of the T3 stub contract
 (the T3 stub in `src/api/stub-server.ts` is intentionally stateless — canned
