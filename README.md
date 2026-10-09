@@ -218,7 +218,7 @@ picks the skill up from any project afterwards.
 ## Development
 
 ```bash
-npm test               # node --test over all src/**/*.test.ts — verified: 70 tests, 70 pass
+npm test               # node --test over all src/**/*.test.ts — verified: 71 tests, 71 pass
 npm run build          # verified: exit 0
 npm run spike:mermaid  # converts a fixture diagram end-to-end — verified: ok: true, 21 elements
 ```
@@ -239,10 +239,14 @@ delete-then-404.
 To run against a **real deployment** instead, export `EXCALIDRAW_BASE_URL`,
 `EXCALIDRAW_USERNAME` and `EXCALIDRAW_PASSWORD` before running the script:
 diagram names are then prefixed `mcp-e2e-` so the deployment is not polluted,
-and everything the script creates is deleted afterwards. The `fork-ai` step is
-skipped (recorded, not fatal) if the real deployment's AI endpoint is
-unavailable. The script never reads a `.env`; it requires `npm run build` to
-have produced the converter bundle and builds it on demand if missing.
+and everything the script creates is deleted afterwards. Against a real
+deployment the `fork-ai` step is **always recorded as skipped**: its assertion
+still compares against the local stub's canned provider and model, so the step
+exercises the call and the endpoint but does not validate the real provider's
+answer (checked by hand against a live deployment: provider `openrouter`, model
+`openrouter/free`, 11 elements stored and read back). The script never reads a
+`.env`; it requires `npm run build` to have produced the converter bundle and
+builds it on demand if missing.
 
 Note: the default local server is a stateful variant of the T3 stub contract
 (the T3 stub in `src/api/stub-server.ts` is intentionally stateless — canned
