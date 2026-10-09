@@ -131,14 +131,20 @@ and docs. Checks listed per task are mandatory evidence.
     recorded rather than guaranteed; a long label on a short arrow can still overflow.
   - Commit: `feat(scene): convert mermaid to excalidraw scene in node`
 
-- [ ] **T5 MCP tools** (test-first at handler level)
-  - `src/tools/`: `create_diagram` (`name`, `mode: agent|fork-ai`, `prompt`,
+- [x] **T5 MCP tools** (test-first at handler level)
+  - `src/tools/normalize.ts`, `src/tools/errors.ts`, `src/tools/diagram-tools.ts`,
+    `src/tools/register.ts`: `create_diagram` (`name`, `mode: agent|fork-ai`, `prompt`,
     `mermaid`, `scene`, `overwrite`), `list_diagrams`, `get_diagram`
-    (`format: scene|summary`), `delete_diagram`.
-  - Mirror the server's name normalization and document that mirroring.
-  - `overwrite: false` must not clobber an existing diagram.
-  - Checks: `node --test` green with a fake client covering both modes, overwrite
-    protection, and summary formatting.
+    (`format: scene|summary`), `delete_diagram`. Handler logic is dependency-injected
+    and transport-free; registration onto `McpServer` is a separate module.
+  - The server's name normalization is mirrored locally and documented as a mirror,
+    with the server's echoed name as the authority. `overwrite: false` refuses to
+    clobber and names the existing diagram.
+  - Context protection: `get_diagram` defaults to a summary bounded to 20 labels of
+    80 characters, and reports how many labels it withheld.
+  - Checks: `npm test` 65/65 green after an observed RED; `npm run build` exit 0;
+    `registerDiagramTools` loaded without a transport and the four tool names
+    confirmed.
   - Commit: `feat(tools): diagram crud tools with agent and fork-ai modes`
 
 - [ ] **T6 stdio server entrypoint**
