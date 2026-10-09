@@ -148,9 +148,170 @@ export const ER_LONG_NAME_FIXTURE: ErFixture = {
 };
 
 /**
+ * Flowchart fixtures, laid out by this project's own flowchart module
+ * (`src/scene/flowchart.ts`), not by mermaid/dagre. `nodes` counts real
+ * (non-subgraph) nodes, `edges` the connections, `subgraphs` the subgraph
+ * containers; the geometry tests in `flowchart.test.ts` assert them against
+ * the produced scene. These fixtures deliberately include a fan-out and a
+ * fan-in with long labels — the shapes that exposed mermaid's constant ~74 px
+ * per-node layout under jsdom (see `odd/notes/mermaid-node-spike.md`).
+ */
+export interface FlowFixture {
+  name: string;
+  mermaid: string;
+  nodes: number;
+  edges: number;
+  subgraphs: number;
+  direction: "TB" | "LR";
+  /** Distinct rank levels the layout must produce (TD: y-levels, LR: x-columns). */
+  ranks: number;
+}
+
+export const FANOUT_FIXTURE: FlowFixture = {
+  name: "flowchart fan-out with long labels",
+  nodes: 5,
+  edges: 4,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 2,
+  mermaid: [
+    "flowchart TD",
+    "  A[Usuario autenticado] --> B[Servicio de validacion de credenciales]",
+    "  A --> C[Registro de auditoria de seguridad]",
+    "  A --> D[Notificacion por correo electronico]",
+    "  A --> E[Sesion de usuario persistente]",
+  ].join("\n"),
+};
+
+export const FANIN_FIXTURE: FlowFixture = {
+  name: "flowchart fan-in with long labels",
+  nodes: 5,
+  edges: 4,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 2,
+  mermaid: [
+    "flowchart TD",
+    "  A[Servicio de pagos] --> Z[Conciliacion contable central]",
+    "  B[Servicio de facturas emitidas] --> Z",
+    "  C[Servicio de notas de credito] --> Z",
+    "  D[Ajustes manuales de inventario] --> Z",
+  ].join("\n"),
+};
+
+export const DECISION_FIXTURE: FlowFixture = {
+  name: "flowchart decision with two labelled branches",
+  nodes: 4,
+  edges: 3,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 3,
+  mermaid: [
+    "flowchart TD",
+    "  A[Solicitud recibida] --> B{Datos completos?}",
+    "  B -->|si| C[Procesar solicitud]",
+    "  B -->|no| D[Devolver al remitente]",
+  ].join("\n"),
+};
+
+export const MULTIRANK_FIXTURE: FlowFixture = {
+  name: "flowchart with several ranks and a shortcut edge",
+  nodes: 5,
+  edges: 5,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 4,
+  mermaid: [
+    "flowchart TD",
+    "  A[Inicio] --> B[Paso uno]",
+    "  B --> C[Paso dos]",
+    "  C --> D[Paso tres]",
+    "  B --> E[Atajo alternativo]",
+    "  E --> D",
+  ].join("\n"),
+};
+
+export const SELF_EDGE_FIXTURE: FlowFixture = {
+  name: "flowchart with a self-edge",
+  nodes: 2,
+  edges: 2,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 2,
+  mermaid: [
+    "flowchart TD",
+    "  A[Proceso con reintento] --> A",
+    "  A --> B[Siguiente etapa]",
+  ].join("\n"),
+};
+
+export const CYCLE_FIXTURE: FlowFixture = {
+  name: "flowchart with a cycle",
+  nodes: 3,
+  edges: 3,
+  subgraphs: 0,
+  direction: "TB",
+  ranks: 3,
+  mermaid: [
+    "flowchart TD",
+    "  A[Estados] --> B[Transicion]",
+    "  B --> C[Verificacion]",
+    "  C --> A",
+  ].join("\n"),
+};
+
+export const LR_FIXTURE: FlowFixture = {
+  name: "flowchart with LR direction",
+  nodes: 4,
+  edges: 3,
+  subgraphs: 0,
+  direction: "LR",
+  ranks: 3,
+  mermaid: [
+    "flowchart LR",
+    "  A[Cliente] --> B[Balanceador]",
+    "  B --> C[Nodo uno]",
+    "  B --> D[Nodo dos]",
+  ].join("\n"),
+};
+
+export const NESTED_SUBGRAPH_LAYOUT_FIXTURE: FlowFixture = {
+  name: "flowchart with nested subgraphs laid out natively",
+  nodes: 4,
+  edges: 4,
+  subgraphs: 2,
+  direction: "TB",
+  ranks: 4,
+  mermaid: [
+    "flowchart TD",
+    "  A[Inicio] --> B[Proceso]",
+    "  subgraph externo",
+    "    B --> C[Fin]",
+    "    subgraph interno",
+    "      C --> D[Archivo]",
+    "    end",
+    "  end",
+    "  D --> A",
+  ].join("\n"),
+};
+
+export const FLOWCHART_FIXTURES: FlowFixture[] = [
+  FANOUT_FIXTURE,
+  FANIN_FIXTURE,
+  DECISION_FIXTURE,
+  MULTIRANK_FIXTURE,
+  SELF_EDGE_FIXTURE,
+  CYCLE_FIXTURE,
+  LR_FIXTURE,
+  NESTED_SUBGRAPH_LAYOUT_FIXTURE,
+];
+
+/**
  * Flowchart fixtures, exercised by the native-conversion tests in
  * `mermaid.test.ts` (`subgraph` blocks resolve thanks to the dom-shim
- * id-prefix selector fallback).
+ * id-prefix selector fallback). Flowcharts are laid out by this project's
+ * own flowchart module (`src/scene/flowchart.ts`); see `FLOWCHART_FIXTURES`
+ * for the geometric fixtures.
  */
 export interface DiagramFixture {
   name: string;

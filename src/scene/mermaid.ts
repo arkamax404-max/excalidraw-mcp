@@ -4,16 +4,22 @@
  * Pipeline (see `odd/notes/mermaid-node-spike.md` for the evidence):
  * 1. validate and enforce the dependency's own limits up front;
  * 2. detect the diagram type with mermaid itself
- *    (`mermaid.mermaidAPI.getDiagramFromText(...).type`): `erDiagram` input is
- *    routed to this project's own ER layout (`src/scene/er.ts`), because the
- *    dependency's ER parser derives all geometry from the rendered SVG, which
- *    the DOM shim fabricates, producing illegible scenes. Detection failures
- *    are not errors: they just leave the input on the generic path, which
- *    raises the typed parse error for genuinely invalid input;
+ *    (`mermaid.mermaidAPI.getDiagramFromText(...).type`) and route:
+ *    - `er` → this project's own ER layout (`src/scene/er.ts`);
+ *    - `flowchart-v2` (mermaid reports this type for BOTH `flowchart ...`
+ *      and `graph ...` input) → this project's own flowchart layout
+ *      (`src/scene/flowchart.ts`), because mermaid's dagre layout gets no
+ *      real text metrics under jsdom (constant ~74 px per node, overlapping
+ *      boxes);
+ *    - any other detected type → `UnsupportedDiagramError` naming the type
+ *      and the supported list, instead of garbage or a placeholder image;
+ *    - a failed detection (null) is not an error: it leaves the input on the
+ *      generic path, which raises the typed parse error for genuinely
+ *      invalid input;
  * 3. strict-parse the remaining Mermaid text with `parseMermaidToExcalidraw`.
  *    The DOM shim's id-prefix selector fallback (mermaid 11 renders ids
  *    prefixed by the render id; the dependency looks them up unprefixed with
- *    `[id="..."]` / `[id='...']`) makes flowcharts with `subgraph ... end`
+ *    `[id="..."]` / `[id='...']`) makes diagrams with `subgraph ... end`
  *    blocks resolve natively, so no flattening retry is needed;
  * 4. convert the parsed skeletons with the bundled converter from
  *    `dist/vendor/excalidraw-converter.mjs`, detecting the dependency's
@@ -30,6 +36,7 @@ import {
   MermaidLimitError,
   MermaidParseError,
   MermaidSceneError,
+  UnsupportedDiagramError,
 } from "./errors.ts";
 import { installDomShim } from "./dom-shim.ts";
 
@@ -66,6 +73,9 @@ export interface MermaidSceneResult {
   scene: ExcalidrawScene;
   metadata: MermaidSceneMetadata;
 }
+
+/** Diagram types this pipeline lays out itself, in routing order. */
+export const SUPPORTED_DIAGRAM_TYPES = ["flowchart", "ER"] as const;
 
 const CONVERTER_BUNDLE = ["dist", "vendor", "excalidraw-converter.mjs"] as const;
 
@@ -212,15 +222,19 @@ export async function mermaidToScene(
   const pipeline = await loadPipeline();
   const parseOptions = { maxEdges, maxTextSize };
 
-  // Route by mermaid's own diagram type: ER input goes to the project's own
-  // layout module (the dependency's ER geometry is unusable under the shim).
-  // A failed detection is not an error — the generic path below raises the
-  // typed parse error for genuinely invalid input.
+  // Route by mermaid's own diagram type: ER and flowchart input go to this
+  // project's own layout modules (the dependency's geometry for both is
+  // unusable under the shim — see odd/notes/mermaid-node-spike.md). A failed
+  // detection is not an error — the generic path below raises the typed parse
+  // error for genuinely invalid input. Any other detected type fails fast.
   let diagramType: string | null = null;
   try {
     diagramType = await pipeline.getDiagramType(mermaidText);
   } catch {
     diagramType = null;
+  }
+  if (diagramType !== null && diagramType !== "er" && diagramType !== "flowchart-v2") {
+    throw new UnsupportedDiagramError(diagramType, SUPPORTED_DIAGRAM_TYPES);
   }
 
   let elements: ExcalidrawElement[];
@@ -229,6 +243,10 @@ export async function mermaidToScene(
     if (diagramType === "er") {
       const { erDiagramToScene } = await import("./er.ts");
       return await erDiagramToScene(mermaidText, { convert: convertSkeletons, maxEdges });
+    }
+    if (diagramType === "flowchart-v2") {
+      const { flowchartToScene } = await import("./flowchart.ts");
+      return await flowchartToScene(mermaidText, { convert: convertSkeletons, maxEdges });
     }
     const parsed = await pipeline.parseMermaid(mermaidText, parseOptions);
     elements = await convertSkeletons(parsed.elements);

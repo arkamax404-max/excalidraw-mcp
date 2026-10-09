@@ -33,6 +33,21 @@ export class MermaidLimitError extends MermaidSceneError {
 }
 
 /**
+ * The input is a valid Mermaid diagram of a type this pipeline does not lay
+ * out itself. The error names the detected type and the supported list so the
+ * caller can fix the input instead of receiving an illegible scene or a
+ * placeholder image.
+ */
+export class UnsupportedDiagramError extends MermaidSceneError {
+  constructor(diagramType: string, supported: readonly string[]) {
+    super(
+      `Unsupported Mermaid diagram type "${diagramType}": only ${supported.join(" and ")} diagrams are supported. ` +
+        `Convert the input to one of the supported types or use a different tool.`,
+    );
+  }
+}
+
+/**
  * Mermaid could not be parsed into a usable diagram. This also covers the
  * dependency's silent failure mode: a failed parse does NOT throw, it returns
  * a single placeholder `image` element — that fallback is detected and raised

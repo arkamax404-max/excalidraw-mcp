@@ -287,14 +287,18 @@ interface EntityBox {
   height: number;
 }
 
-interface Point {
+export interface Point {
   x: number;
   y: number;
 }
 
 const textWidth = (text: string): number => canvasTextWidth(text);
 
-const textSkeleton = (text: string, position: Point): Record<string, unknown> => ({
+/**
+ * Builds a free (unbound) text skeleton. Shared with the flowchart layout
+ * module, which places edge labels the same way.
+ */
+export const textSkeleton = (text: string, position: Point): Record<string, unknown> => ({
   type: "text",
   x: position.x,
   y: position.y,
@@ -304,7 +308,12 @@ const textSkeleton = (text: string, position: Point): Record<string, unknown> =>
   fontSize: ER_FONT_SIZE,
 });
 
-const arrowSkeleton = (options: {
+/**
+ * Builds an arrow skeleton with a start/end binding and an empty (skipped)
+ * label slot. Shared with the flowchart layout module; see the er.ts header
+ * for why the label slot stays empty and unbound.
+ */
+export const arrowSkeleton = (options: {
   from: Point;
   points: number[][];
   startId: string;
